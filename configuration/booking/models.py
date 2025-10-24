@@ -490,6 +490,7 @@ class OrganizationLink(models.Model):
 
     def __str__(self):
         return f"Main:{self.main_organization.name} Linked:{self.link_organization.name}({self.main_organization_request}/{self.this_organization_request})"
+
 class AllowedReseller(models.Model):
     inventory_owner_company = models.ForeignKey(
         OrganizationLink, on_delete=models.CASCADE, related_name="allowed_resellers"
