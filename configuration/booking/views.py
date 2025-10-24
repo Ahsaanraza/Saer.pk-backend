@@ -383,9 +383,12 @@ class BankAccountViewSet(viewsets.ModelViewSet):
         serializer.save()  # ðŸ‘ˆ yahan save zaroori hai
         return Response(serializer.data, status=status.HTTP_201_CREATED)
     
+
 class IsSuperAdmin(BasePermission):
     def has_permission(self, request, view):
         return request.user.is_superuser
+
+
 class OrganizationLinkViewSet(viewsets.ModelViewSet):
     queryset = OrganizationLink.objects.all()
     serializer_class = OrganizationLinkSerializer
@@ -400,6 +403,7 @@ class OrganizationLinkViewSet(viewsets.ModelViewSet):
 
         headers = self.get_success_headers(serializer.data)
         return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+
     @action(detail=False, methods=['get'], url_path='shared')
     def shared_inventory_partners(self, request):
         """
@@ -419,13 +423,18 @@ class OrganizationLinkViewSet(viewsets.ModelViewSet):
 
         serializer = self.get_serializer(links, many=True)
         return Response(serializer.data)
+
+
 class AllowedResellerViewSet(viewsets.ModelViewSet):
     queryset = AllowedReseller.objects.all()
     serializer_class = AllowedResellerSerializer
 
+
 class DiscountGroupViewSet(viewsets.ModelViewSet):
     queryset = DiscountGroup.objects.all().prefetch_related("discounts")
     serializer_class = DiscountGroupSerializer
+
+
 class MarkupViewSet(viewsets.ModelViewSet):
     queryset = Markup.objects.all().order_by("-created_at")
     serializer_class = MarkupSerializer

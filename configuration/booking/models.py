@@ -504,7 +504,7 @@ class AllowedReseller(models.Model):
         ("GROUP_TICKETS", "Group Tickets"),
         ("HOTELS", "Hotels"),
     ]
-    allowed =models.CharField(choices=ALLOWED_CHOICES,null=True,blank=True)
+    allowed =models.CharField(max_length=255,choices=ALLOWED_CHOICES,null=True,blank=True)
 
     STATUS_CHOICES = [
         ("PENDING", "Pending"),
