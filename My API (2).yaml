@@ -5577,22 +5577,21 @@ components:
         id:
           type: integer
           readOnly: true
-        reseller_companies:
+        reseller_company:
+          type: integer
+          nullable: true
+        allowed_types:
           type: array
           items:
-            type: integer
-        allowed: {}
+            type: string
+            enum:
+              - GROUP_TICKETS
+              - UMRAH_PACKAGES
+              - HOTELS
         requested_status_by_reseller:
           $ref: '#/components/schemas/RequestedStatusByResellerEnum'
-        commission_group_id:
+        discount_group:
           type: integer
-          maximum: 2147483647
-          minimum: -2147483648
-          nullable: true
-        markup_group_id:
-          type: integer
-          maximum: 2147483647
-          minimum: -2147483648
           nullable: true
         created_at:
           type: string
@@ -5608,7 +5607,6 @@ components:
       - created_at
       - id
       - inventory_owner_company
-      - reseller_companies
       - updated_at
     AppliesToEnum:
       enum:
@@ -7054,10 +7052,20 @@ components:
           type: string
           nullable: true
           maxLength: 255
-        google_drive_link:
+        photos:
+          type: array
+          items:
+            $ref: '#/components/schemas/HotelPhoto'
+        video:
           type: string
           nullable: true
           maxLength: 255
+        inventory_owner_organization_id:
+          type: integer
+          nullable: true
+        reselling_allowed:
+          type: boolean
+          nullable: true
         contact_number:
           type: string
           nullable: true
@@ -7094,6 +7102,25 @@ components:
       - name
       - organization
       - prices
+    HotelPhoto:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        image:
+          type: string
+          format: uri
+          nullable: true
+        caption:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - id
     InternalNote:
       type: object
       properties:
@@ -7372,22 +7399,21 @@ components:
         id:
           type: integer
           readOnly: true
-        reseller_companies:
+        reseller_company:
+          type: integer
+          nullable: true
+        allowed_types:
           type: array
           items:
-            type: integer
-        allowed: {}
+            type: string
+            enum:
+              - GROUP_TICKETS
+              - UMRAH_PACKAGES
+              - HOTELS
         requested_status_by_reseller:
           $ref: '#/components/schemas/RequestedStatusByResellerEnum'
-        commission_group_id:
+        discount_group:
           type: integer
-          maximum: 2147483647
-          minimum: -2147483648
-          nullable: true
-        markup_group_id:
-          type: integer
-          maximum: 2147483647
-          minimum: -2147483648
           nullable: true
         created_at:
           type: string

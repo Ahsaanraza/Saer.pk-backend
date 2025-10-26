@@ -200,6 +200,69 @@ class BookingTicketDetails(models.Model):
     # is_price_pkr= models.BooleanField(default=True)
     # riyal_rate = models.FloatField(default=0)
 
+    def save(self, *args, **kwargs):
+        """
+        Override save to update Ticket counters (booked_tickets, confirmed_tickets, left_seats)
+        when booking ticket details are created or updated.
+        """
+        from tickets.models import Ticket
+
+        old = None
+        if self.pk:
+            try:
+                old = BookingTicketDetails.objects.get(pk=self.pk)
+            except BookingTicketDetails.DoesNotExist:
+                old = None
+
+        super().save(*args, **kwargs)
+
+        try:
+            ticket = Ticket.objects.get(pk=self.ticket_id)
+        except Ticket.DoesNotExist:
+            return
+
+        # compute seat delta for booked_tickets
+        new_seats = self.seats or 0
+        old_seats = old.seats if old else 0
+        delta = new_seats - old_seats
+
+        if delta != 0:
+            ticket.booked_tickets = max(0, ticket.booked_tickets + delta)
+            ticket.left_seats = max(0, ticket.total_seats - ticket.booked_tickets)
+
+        # handle confirmed status transition
+        old_status = getattr(old, 'status', None)
+        new_status = self.status
+        if old_status != 'Confirmed' and new_status == 'Confirmed':
+            # add to confirmed_tickets
+            ticket.confirmed_tickets = ticket.confirmed_tickets + new_seats
+        elif old_status == 'Confirmed' and new_status != 'Confirmed':
+            # remove from confirmed_tickets
+            ticket.confirmed_tickets = max(0, ticket.confirmed_tickets - old_seats)
+
+        ticket.save()
+
+    def delete(self, *args, **kwargs):
+        """Adjust ticket counters when booking ticket detail is deleted."""
+        from tickets.models import Ticket
+
+        try:
+            ticket = Ticket.objects.get(pk=self.ticket_id)
+        except Ticket.DoesNotExist:
+            super().delete(*args, **kwargs)
+            return
+
+        # subtract seats
+        seats = self.seats or 0
+        ticket.booked_tickets = max(0, ticket.booked_tickets - seats)
+        ticket.left_seats = max(0, ticket.total_seats - ticket.booked_tickets)
+
+        if self.status == 'Confirmed':
+            ticket.confirmed_tickets = max(0, ticket.confirmed_tickets - seats)
+
+        ticket.save()
+        super().delete(*args, **kwargs)
+
 
 class BookingTicketTicketTripDetails(models.Model):
     ticket = models.ForeignKey(
@@ -267,6 +330,7 @@ class BookingPersonDetail(models.Model):
     visa_rate = models.FloatField(default=0, blank=True, null=True)        # Base visa rate
     visa_rate_in_sar = models.FloatField(default=0, blank=True, null=True) # Converted to SAR
     visa_rate_in_pkr = models.FloatField(default=0, blank=True, null=True) # Converted to PKR
+    ticket_included = models.BooleanField(default=True)
     # ticket_voucher_number = models.CharField(max_length=20, blank=True, null=True)
     # ticker_brn= models.CharField(max_length=20, blank=True, null=True)
     # food_voucher_number = models.CharField(max_length=20, blank=True, null=True)
@@ -489,16 +553,20 @@ class AllowedReseller(models.Model):
         OrganizationLink, on_delete=models.CASCADE, related_name="allowed_resellers"
     )
 
-    reseller_companies = models.ManyToManyField(
-        Organization, related_name="reseller_links"
+    # Single reseller company allowed to resell the owner's inventory
+    reseller_company = models.ForeignKey(
+        Organization, on_delete=models.CASCADE, related_name="reseller_links",
+        null=True, blank=True
     )
 
     ALLOWED_CHOICES = [
-        ("UMRAH_PACKAGES", "Umrah Packages"),
         ("GROUP_TICKETS", "Group Tickets"),
+        ("UMRAH_PACKAGES", "Umrah Packages"),
         ("HOTELS", "Hotels"),
     ]
-    allowed = models.JSONField(default=list)  # ["UMRAH_PACKAGES", "HOTELS"]
+
+    # Which inventory types the reseller is allowed to access. Stored as JSON list.
+    allowed_types = models.JSONField(default=list)
 
     STATUS_CHOICES = [
         ("PENDING", "Pending"),
@@ -509,8 +577,10 @@ class AllowedReseller(models.Model):
         max_length=20, choices=STATUS_CHOICES, default="PENDING"
     )
 
-    commission_group_id = models.IntegerField(blank=True, null=True)
-    markup_group_id = models.IntegerField(blank=True, null=True)
+    # Link to discount group (optional)
+    discount_group = models.ForeignKey(
+        "DiscountGroup", on_delete=models.SET_NULL, null=True, blank=True, related_name="allowed_resellers"
+    )
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

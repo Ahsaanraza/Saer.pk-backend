@@ -217,8 +217,9 @@ class BookingPersonDetailSerializer(serializers.ModelSerializer):
         extra_kwargs = {"booking": {"read_only": True}}
     
     def create(self, validated_data):
-        # ziyarat_data = validated_data.pop("ziyarat_details", [])
-        # food_data = validated_data.pop("food_details", [])
+        # nested lists
+        ziyarat_data = validated_data.pop("ziyarat_details", [])
+        food_data = validated_data.pop("food_details", [])
         contact_data = validated_data.pop("contact_details", [])
         person = BookingPersonDetail.objects.create(**validated_data)
 
@@ -237,8 +238,9 @@ class BookingPersonDetailSerializer(serializers.ModelSerializer):
         return person
     
     def update(self, instance, validated_data):
-        # ziyarat_data = validated_data.pop("ziyarat_details", [])
-        # food_data = validated_data.pop("food_details", [])
+        # nested lists (None if not provided on PATCH)
+        ziyarat_data = validated_data.pop("ziyarat_details", None)
+        food_data = validated_data.pop("food_details", None)
         contact_data = validated_data.pop("contact_details", [])
 
         for attr, value in validated_data.items():
@@ -619,27 +621,35 @@ class OrganizationLinkSerializer(serializers.ModelSerializer):
         model = OrganizationLink
         fields = "__all__"
 class AllowedResellerSerializer(serializers.ModelSerializer):
-    reseller_companies = serializers.PrimaryKeyRelatedField(
-        many=True, queryset=Organization.objects.all()
+    reseller_company = serializers.PrimaryKeyRelatedField(
+        queryset=Organization.objects.all(), allow_null=True, required=False
+    )
+    discount_group = serializers.PrimaryKeyRelatedField(
+        queryset=DiscountGroup.objects.all(), allow_null=True, required=False
     )
 
     class Meta:
         model = AllowedReseller
-        fields = "__all__"
+        # expose only relevant fields in stable order
+        fields = [
+            "id",
+            "inventory_owner_company",
+            "reseller_company",
+            "discount_group",
+            "allowed_types",
+            "requested_status_by_reseller",
+            "created_at",
+            "updated_at",
+        ]
 
     def create(self, validated_data):
-        resellers = validated_data.pop("reseller_companies", [])
-        allowed_reseller = AllowedReseller.objects.create(**validated_data)
-        allowed_reseller.reseller_companies.set(resellers)
-        return allowed_reseller
+        # inventory_owner_company, reseller_company, discount_group, allowed_types
+        return AllowedReseller.objects.create(**validated_data)
 
     def update(self, instance, validated_data):
-        resellers = validated_data.pop("reseller_companies", None)
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
         instance.save()
-        if resellers is not None:
-            instance.reseller_companies.set(resellers)
         return instance
 class DiscountSerializer(serializers.ModelSerializer):
     discounted_hotels = serializers.PrimaryKeyRelatedField(

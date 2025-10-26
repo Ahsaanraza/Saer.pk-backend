@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from rest_framework.exceptions import PermissionDenied
 from .models import (
     Ticket,
     TicketTripDetails,
@@ -88,6 +89,8 @@ class HotelContactDetailsSerializer(serializers.ModelSerializer):
 class HotelsSerializer(serializers.ModelSerializer):
     prices = HotelPricesSerializer(many=True)
     contact_details = HotelContactDetailsSerializer(many=True, required=False)
+    photos = serializers.ListField(child=serializers.CharField(), write_only=True, required=False)
+    photos_data = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = Hotels
@@ -96,17 +99,24 @@ class HotelsSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         prices_data = validated_data.pop("prices", [])
         contact_details_data = validated_data.pop("contact_details", [])
+        photos = validated_data.pop("photos", [])
         hotel = Hotels.objects.create(**validated_data)
 
         for price in prices_data:
             HotelPrices.objects.create(hotel=hotel, **price)
         for contact in contact_details_data:
             HotelContactDetails.objects.create(hotel=hotel, **contact)
+        # create photo entries if provided (photos are expected as URLs or paths)
+        for p in photos:
+            # if photos are URLs, store them in caption or treat as external; here we create Photo with caption=URL
+            from .models import HotelPhoto
+            HotelPhoto.objects.create(hotel=hotel, caption=p)
         return hotel
 
     def update(self, instance, validated_data):
         prices_data = validated_data.pop("prices", None)
         contact_details_data = validated_data.pop("contact_details", None)
+        photos = validated_data.pop("photos", None)
 
         # Update main Hotel fields
         for attr, value in validated_data.items():
@@ -115,6 +125,13 @@ class HotelsSerializer(serializers.ModelSerializer):
 
         # Update prices only if provided
         if prices_data is not None:
+            # special rule: rates can only be changed by the owning organization
+            request = self.context.get("request")
+            org_id = None
+            if request:
+                org_id = request.query_params.get("organization")
+            if org_id is None or str(instance.organization_id) != str(org_id):
+                raise PermissionDenied("Rates can only be changed by the owning organization.")
             instance.prices.all().delete()
             for price in prices_data:
                 HotelPrices.objects.create(hotel=instance, **price)
@@ -122,7 +139,20 @@ class HotelsSerializer(serializers.ModelSerializer):
             instance.contact_details.all().delete()
             for contact in contact_details_data:
                 HotelContactDetails.objects.create(hotel=instance, **contact)
+        if photos is not None:
+            # replace photos list
+            instance.photos.all().delete()
+            from .models import HotelPhoto
+            for p in photos:
+                HotelPhoto.objects.create(hotel=instance, caption=p)
         return instance
+
+    def get_photos_data(self, obj):
+        photos_qs = obj.photos.all() if hasattr(obj, "photos") else []
+        return [
+            {"id": p.id, "caption": p.caption, "image": p.image.url if getattr(p, 'image', None) else None}
+            for p in photos_qs
+        ]
 
 
 class HotelRoomDetailsSerializer(serializers.ModelSerializer):

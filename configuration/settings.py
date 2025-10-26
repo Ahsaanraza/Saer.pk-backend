@@ -92,13 +92,14 @@ WSGI_APPLICATION = "configuration.wsgi.application"
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.mysql',
-        'NAME': 'saerkaro_testapi',
-        'USER': 'saerkaro_admin',
-        'PASSWORD': 'UY};sK4EUrPZ',
-        'HOST': 'localhost',
+        'NAME': 'saerpk_local',   # your database name
+        'USER': 'root',
+        'PASSWORD': 'root',
+        'HOST': '127.0.0.1',      # or 'localhost'
         'PORT': '3306',
     }
 }
+
 
 # Use an in-memory SQLite database when running tests locally to avoid
 # depending on external MySQL credentials during unit test runs.

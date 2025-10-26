@@ -27,6 +27,10 @@ class Ticket(models.Model):
     left_seats = models.IntegerField(default=0)
     booked_tickets = models.IntegerField(default=0)
     confirmed_tickets = models.IntegerField(default=0)
+    # The organization that actually owns this inventory (if different from the publishing organization)
+    owner_organization_id = models.IntegerField(blank=True, null=True)
+    # Whether this ticket can be resold by allowed resellers
+    reselling_allowed = models.BooleanField(default=False)
     weight = models.FloatField(default=0)
     pieces = models.IntegerField(default=0)
     is_umrah_seat = models.BooleanField(default=False)
@@ -84,7 +88,10 @@ class Hotels(models.Model):
     city = models.ForeignKey(City, on_delete=models.SET_NULL, null=True, related_name="hotels")
     address = models.TextField()
     google_location = models.CharField(max_length=255, blank=True, null=True)
-    google_drive_link = models.CharField(max_length=255, blank=True, null=True)
+    # removed google_drive_link per API 5
+    video = models.CharField(max_length=255, blank=True, null=True)
+    inventory_owner_organization_id = models.IntegerField(blank=True, null=True)
+    reselling_allowed = models.BooleanField(default=False)
     contact_number = models.CharField(max_length=20, blank=True, null=True)
     category = models.CharField(max_length=50)
     distance = models.FloatField(default=0)
@@ -143,3 +150,13 @@ class RoomDetails(models.Model):
     room = models.ForeignKey(HotelRooms, on_delete=models.CASCADE, related_name="details")
     bed_number = models.CharField(max_length=20)
     is_assigned = models.BooleanField(default=False)
+
+
+class HotelPhoto(models.Model):
+    hotel = models.ForeignKey(Hotels, on_delete=models.CASCADE, related_name="photos")
+    image = models.ImageField(upload_to="media/hotel_photos/", null=True, blank=True)
+    caption = models.CharField(max_length=255, blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"Photo {self.id} for {self.hotel.name}"
