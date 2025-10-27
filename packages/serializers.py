@@ -31,6 +31,7 @@ from .models import (
 )
 from rest_framework import serializers
 from tickets.serializers import HotelsSerializer, TicketSerializer
+from django.db import models
 
 
 class RiyalRateSerializer(ModelSerializer):
@@ -231,6 +232,15 @@ class UmrahPackageSerializer(ModelSerializer):
     )
     ticket_details = UmrahPackageTicketDetailsSerializer(many=True, required=False)
     discount_details = UmrahPackageDiscountDetailsSerializer(many=True, required=False)
+    excluded_tickets = serializers.SerializerMethodField(read_only=True)
+    adult_price = serializers.SerializerMethodField(read_only=True)
+    infant_price = serializers.SerializerMethodField(read_only=True)
+    child_discount = serializers.SerializerMethodField(read_only=True)
+    quint_room_price = serializers.SerializerMethodField(read_only=True)
+    quad_room_price = serializers.SerializerMethodField(read_only=True)
+    triple_room_price = serializers.SerializerMethodField(read_only=True)
+    double_room_price = serializers.SerializerMethodField(read_only=True)
+    sharing_bed_price = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = UmrahPackage
@@ -287,6 +297,65 @@ class UmrahPackageSerializer(ModelSerializer):
             UmrahPackageDiscountDetails.objects.create(package=instance, **discount)
 
         return instance
+
+    def get_excluded_tickets(self, obj):
+        """Return full Ticket objects where any of the seat-related fields equals 2147483647
+        and the ticket is not part of this package's included ticket_details.
+        """
+        from tickets.models import Ticket
+
+        MAX_SENTINEL = 2147483647
+        included_ids = list(obj.ticket_details.values_list("ticket_id", flat=True))
+
+        qs = Ticket.objects.filter(
+            (
+                models.Q(total_seats=MAX_SENTINEL)
+                | models.Q(left_seats=MAX_SENTINEL)
+                | models.Q(booked_tickets=MAX_SENTINEL)
+                | models.Q(confirmed_tickets=MAX_SENTINEL)
+            )
+        ).exclude(id__in=included_ids)
+
+        return TicketSerializer(qs, many=True).data
+
+    def get_adult_price(self, obj):
+        # keep the original (typo'd) field name as the source
+        return getattr(obj, "adault_visa_price", None)
+
+    def get_infant_price(self, obj):
+        # infant_price = infant_visa_price + ticket price (use first included ticket if present)
+        base = getattr(obj, "infant_visa_price", 0) or 0
+        first_ticket = obj.ticket_details.first()
+        ticket_price = 0
+        if first_ticket and getattr(first_ticket, "ticket", None):
+            ticket_obj = first_ticket.ticket
+            ticket_price = getattr(ticket_obj, "adult_price", 0) or 0
+        return base + ticket_price
+
+    def get_child_discount(self, obj):
+        # use child_visa_price as the flat child discount/price if present
+        return getattr(obj, "child_visa_price", None)
+
+    def _first_hotel_field(self, obj, field_name):
+        first = obj.hotel_details.first()
+        if not first:
+            return None
+        return getattr(first, field_name, None)
+
+    def get_quint_room_price(self, obj):
+        return self._first_hotel_field(obj, "quaint_bed_price")
+
+    def get_quad_room_price(self, obj):
+        return self._first_hotel_field(obj, "quad_bed_price")
+
+    def get_triple_room_price(self, obj):
+        return self._first_hotel_field(obj, "triple_bed_price")
+
+    def get_double_room_price(self, obj):
+        return self._first_hotel_field(obj, "double_bed_price")
+
+    def get_sharing_bed_price(self, obj):
+        return self._first_hotel_field(obj, "sharing_bed_price")
 
 
 class CustomUmrahPackageHotelDetailsSerializer(ModelSerializer):

@@ -294,6 +294,8 @@ class BookingSerializer(serializers.ModelSerializer):
     ticket_details = BookingTicketDetailsSerializer(many=True, required=False)
     person_details = BookingPersonDetailSerializer(many=True, required=False)
     payment_details = PaymentSerializer(many=True, required=False)
+    payments = serializers.ListField(child=serializers.DictField(), required=False)
+    journal_items = serializers.ListField(child=serializers.DictField(), required=False)
     remaining_amount = serializers.FloatField(read_only=True)
     booking_number = serializers.CharField(read_only=True)
     agency = AgencySerializer(read_only=True)
@@ -325,6 +327,9 @@ class BookingSerializer(serializers.ModelSerializer):
         ticket_data = validated_data.pop("ticket_details", [])
         person_data = validated_data.pop("person_details", [])
         payment_data = validated_data.pop("payment_details", [])
+        payments_data = validated_data.pop("payments", [])
+        journal_data = validated_data.pop("journal_items", [])
+
         booking_number = f"BK-{now().strftime('%Y%m%d')}-{uuid.uuid4().hex[:6].upper()}"
 
         # booking = Booking.objects.create(**validated_data)
@@ -332,6 +337,13 @@ class BookingSerializer(serializers.ModelSerializer):
             booking_number=booking_number,
             **validated_data
         )
+
+        # attach payments/journal if provided (stored as JSON on Booking)
+        if payments_data:
+            booking.payments = payments_data
+        if journal_data:
+            booking.journal_items = journal_data
+        booking.save()
 
         # --- Flat relations (bulk_create) ---
         # if hotel_data:
@@ -676,23 +688,119 @@ class DiscountSerializer(serializers.ModelSerializer):
 
 
 class DiscountGroupSerializer(serializers.ModelSerializer):
-    discounts = DiscountSerializer(many=True)
+    discounts = DiscountSerializer(many=True, required=False)
+
+    # allow a more convenient hotel_night_discounts payload shape as requested by the API
+    hotel_night_discounts = serializers.ListField(child=serializers.DictField(), write_only=True, required=False)
 
     class Meta:
         model = DiscountGroup
-        fields = ["id", "name", "organization", "is_active", "discounts"]
+        fields = ["id", "name", "group_type", "organization", "is_active", "discounts", "hotel_night_discounts"]
 
     def create(self, validated_data):
         discounts_data = validated_data.pop("discounts", [])
+        hotel_night_discounts = validated_data.pop("hotel_night_discounts", [])
         discount_group = DiscountGroup.objects.create(**validated_data)
 
+        # create explicit discounts passed in the `discounts` list
         for discount_data in discounts_data:
             hotels = discount_data.pop("discounted_hotels", [])
             discount = Discount.objects.create(discount_group=discount_group, **discount_data)
             if hotels:
                 discount.discounted_hotels.set(hotels)
 
+        # handle hotel_night_discounts convenience format: each entry may contain per-room-type discounts + discounted_hotels list
+        # expected keys: quint_per_night_discount, quad_per_night_discount, triple_per_night_discount, double_per_night_discount, sharing_per_night_discount, other_per_night_discount, discounted_hotels
+        room_map = {
+            "quint_per_night_discount": "quint",
+            "quad_per_night_discount": "quad",
+            "triple_per_night_discount": "triple",
+            "double_per_night_discount": "double",
+            "sharing_per_night_discount": "sharing",
+            "other_per_night_discount": "all",
+        }
+
+        for entry in hotel_night_discounts:
+            hotels = entry.get("discounted_hotels", [])
+            for key, room_type in room_map.items():
+                val = entry.get(key)
+                if val in (None, "", []):
+                    continue
+                # create a Discount per room type
+                disc = Discount.objects.create(
+                    discount_group=discount_group,
+                    organization=discount_group.organization,
+                    things="hotel",
+                    room_type=room_type,
+                    per_night_discount=val,
+                )
+                if hotels:
+                    disc.discounted_hotels.set(hotels)
+
         return discount_group
+
+    def to_representation(self, instance):
+        """
+        Return the requested API shape:
+        - `discounts` as an object with `group_ticket_discount_amount` and `umrah_package_discount_amount` keys
+        - `hotel_night_discounts` as a list of objects where each object contains per-room-type keys and `discounted_hotels` list
+        """
+        data = super().to_representation(instance)
+
+        # Build discounts object (single values)
+        group_ticket_disc = instance.discounts.filter(things="group_ticket").first()
+        umrah_disc = instance.discounts.filter(things="umrah_package").first()
+
+        discounts_obj = {
+            "group_ticket_discount_amount": (
+                str(group_ticket_disc.group_ticket_discount_amount)
+                if group_ticket_disc and group_ticket_disc.group_ticket_discount_amount is not None
+                else ""
+            ),
+            "umrah_package_discount_amount": (
+                str(umrah_disc.umrah_package_discount_amount)
+                if umrah_disc and umrah_disc.umrah_package_discount_amount is not None
+                else ""
+            ),
+        }
+        data["discounts"] = discounts_obj
+
+        # Build hotel_night_discounts list by grouping hotel Discounts by the set of hotel IDs
+        hotel_discs = instance.discounts.filter(things="hotel").prefetch_related("discounted_hotels")
+        grouped = {}
+        room_key_map = {
+            "quint": "quint_per_night_discount",
+            "quad": "quad_per_night_discount",
+            "triple": "triple_per_night_discount",
+            "double": "double_per_night_discount",
+            "sharing": "sharing_per_night_discount",
+            "all": "other_per_night_discount",
+        }
+
+        # For each hotel discount row, associate its per_night_discount under the correct grouping
+        for disc in hotel_discs:
+            hotel_ids = tuple(sorted([h.id for h in disc.discounted_hotels.all()]))
+            if hotel_ids not in grouped:
+                # initialize an entry with empty strings
+                grouped[hotel_ids] = {
+                    "quint_per_night_discount": "",
+                    "quad_per_night_discount": "",
+                    "triple_per_night_discount": "",
+                    "double_per_night_discount": "",
+                    "sharing_per_night_discount": "",
+                    "other_per_night_discount": "",
+                    "discounted_hotels": list(hotel_ids),
+                }
+
+            key = room_key_map.get(disc.room_type)
+            if key:
+                grouped[hotel_ids][key] = (
+                    str(disc.per_night_discount) if disc.per_night_discount is not None else ""
+                )
+
+        data["hotel_night_discounts"] = list(grouped.values())
+
+        return data
 class MarkupSerializer(serializers.ModelSerializer):
     class Meta:
         model = Markup

@@ -197,19 +197,6 @@ def booking_post_delete(sender, instance, **kwargs):
     """When a booking is deleted, restore seats depending on its status."""
     status = instance.status
     total_pax = instance.total_pax or 0
-
-    # For tickets
-    for td in instance.ticket_details.all():
-        seats = td.seats or 0
-        if seats <= 0:
-            continue
-        # restore availability
-        _apply_ticket_changes(td.ticket_id, left_delta=seats)
-        if str(status).lower() in ['pending', 'unpaid']:
-            _apply_ticket_changes(td.ticket_id, booked_delta=-seats)
-        elif str(status).lower() in ['paid', 'confirmed']:
-            _apply_ticket_changes(td.ticket_id, confirmed_delta=-seats)
-
     # Umrah package
     if instance.umrah_package_id:
         _apply_package_changes(instance.umrah_package_id, left_delta=total_pax)
@@ -217,3 +204,23 @@ def booking_post_delete(sender, instance, **kwargs):
             _apply_package_changes(instance.umrah_package_id, booked_delta=-total_pax)
         elif str(status).lower() in ['paid', 'confirmed']:
             _apply_package_changes(instance.umrah_package_id, confirmed_delta=-total_pax)
+
+
+
+@receiver(post_delete, sender=BookingTicketDetails)
+def booking_ticketdetails_post_delete(sender, instance, **kwargs):
+    """Adjust ticket counters when a BookingTicketDetails row is deleted (covers cascade deletes)."""
+    seats = instance.seats or 0
+    if seats <= 0:
+        return
+    # restore availability
+    _apply_ticket_changes(instance.ticket_id, left_delta=seats)
+    # prefer booking status (parent) to decide which counters to decrement
+    booking_status = getattr(getattr(instance, 'booking', None), 'status', None)
+    if booking_status and str(booking_status).lower() in ['pending', 'unpaid']:
+        _apply_ticket_changes(instance.ticket_id, booked_delta=-seats)
+    elif booking_status and str(booking_status).lower() in ['paid', 'confirmed']:
+        _apply_ticket_changes(instance.ticket_id, confirmed_delta=-seats)
+    else:
+        # fallback: decrement booked_tickets (safer default)
+        _apply_ticket_changes(instance.ticket_id, booked_delta=-seats)

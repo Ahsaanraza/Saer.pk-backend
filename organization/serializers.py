@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from django.contrib.auth import get_user_model
 from .models import Organization, Branch, Agency, AgencyFiles, AgencyContact
 from .models import OrganizationLink
 
@@ -47,6 +48,9 @@ class AgencySerializer(serializers.ModelSerializer):
     branch_name = serializers.CharField(source="branch.name", read_only=True)
     files = AgencyFilesSerializer(many=True, required=False)
     contacts = AgencyContactSerializer(many=True, required=False)
+    assign_to = serializers.PrimaryKeyRelatedField(
+        queryset=get_user_model().objects.all(), required=False, allow_null=True
+    )
     
 
     class Meta:

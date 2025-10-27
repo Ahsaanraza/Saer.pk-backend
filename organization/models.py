@@ -45,6 +45,34 @@ class Agency(models.Model):
     address = models.TextField(null=True, blank=True)
     email = models.EmailField(null=True, blank=True)
     agreement_status = models.BooleanField(default=False)
+    
+    # New fields for API 8
+    credit_limit = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    credit_limit_days = models.IntegerField(null=True, blank=True)
+
+    AGENCY_TYPE_CHOICES = [
+        ("Area Agency", "Area Agency"),
+        ("Full Agency", "Full Agency"),
+    ]
+    agency_type = models.CharField(max_length=50, choices=AGENCY_TYPE_CHOICES, null=True, blank=True)
+
+    # Auto-generated short agency identifier (6 chars)
+    agency_id = models.CharField(max_length=6, unique=True, null=True, blank=True)
+
+    # User who manages this agency
+    assign_to = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name="managed_agencies")
+
+    def save(self, *args, **kwargs):
+        # auto-generate a unique 6-char agency_id if not provided
+        if not self.agency_id:
+            import random, string
+
+            for _ in range(10):
+                candidate = "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
+                if not Agency.objects.filter(agency_id=candidate).exists():
+                    self.agency_id = candidate
+                    break
+        super().save(*args, **kwargs)
 
 
 class AgencyFiles(models.Model):

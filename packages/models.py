@@ -281,6 +281,19 @@ class UmrahPackage(models.Model):
     booked_seats = models.BigIntegerField(default=0, blank=True, null=True)
     confirmed_seats = models.BigIntegerField(default=0, blank=True, null=True)
     inventory_owner_organization_id = models.IntegerField(blank=True, null=True)
+    # Whether this package may be resold by allowed resellers
+    reselling_allowed = models.BooleanField(default=False)
+
+    # Commission configuration
+    # Area Agent Commission per pax type
+    area_agent_commission_adult = models.FloatField(default=0, blank=True, null=True)
+    area_agent_commission_child = models.FloatField(default=0, blank=True, null=True)
+    area_agent_commission_infant = models.FloatField(default=0, blank=True, null=True)
+
+    # Branch Commission per pax type
+    branch_commission_adult = models.FloatField(default=0, blank=True, null=True)
+    branch_commission_child = models.FloatField(default=0, blank=True, null=True)
+    branch_commission_infant = models.FloatField(default=0, blank=True, null=True)
 
 
 

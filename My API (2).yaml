@@ -5485,6 +5485,23 @@ components:
           maxLength: 254
         agreement_status:
           type: boolean
+        credit_limit:
+          type: number
+          format: double
+          nullable: true
+        credit_limit_days:
+          type: integer
+          nullable: true
+        agency_type:
+          type: string
+          nullable: true
+        agency_id:
+          type: string
+          nullable: true
+          maxLength: 12
+        assign_to:
+          type: integer
+          nullable: true
         branch:
           type: integer
         user:
@@ -6165,6 +6182,9 @@ components:
         ticket_status:
           type: string
           maxLength: 20
+        ticket_included:
+          type: boolean
+          nullable: true
         ticket_remarks:
           type: string
           nullable: true
@@ -6856,6 +6876,9 @@ components:
           type: integer
         is_active:
           type: boolean
+        group_type:
+          type: string
+          nullable: true
         discounts:
           type: array
           items:
@@ -8014,7 +8037,11 @@ components:
           type: string
           nullable: true
           maxLength: 255
-        google_drive_link:
+        photos:
+          type: array
+          items:
+            $ref: '#/components/schemas/HotelPhoto'
+        video:
           type: string
           nullable: true
           maxLength: 255
@@ -8040,11 +8067,33 @@ components:
           type: string
           nullable: true
           maxLength: 50
+        inventory_owner_organization_id:
+          type: integer
+          nullable: true
+        reselling_allowed:
+          type: boolean
         organization:
           type: integer
         city:
           type: integer
           nullable: true
+    HotelPhoto:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        url:
+          type: string
+          format: uri
+        caption:
+          type: string
+          nullable: true
+        hotel:
+          type: integer
+      required:
+      - id
+      - url
     PatchedInternalNote:
       type: object
       properties:
@@ -8406,6 +8455,68 @@ components:
           type: integer
           maximum: 2147483647
           minimum: -2147483648
+          nullable: true
+        reselling_allowed:
+          type: boolean
+        area_agent_commission_adult:
+          type: number
+          format: double
+          nullable: true
+        area_agent_commission_child:
+          type: number
+          format: double
+          nullable: true
+        area_agent_commission_infant:
+          type: number
+          format: double
+          nullable: true
+        branch_commission_adult:
+          type: number
+          format: double
+          nullable: true
+        branch_commission_child:
+          type: number
+          format: double
+          nullable: true
+        branch_commission_infant:
+          type: number
+          format: double
+          nullable: true
+        excluded_tickets:
+          type: array
+          items:
+            $ref: '#/components/schemas/Ticket'
+        adult_price:
+          type: number
+          format: double
+          nullable: true
+        infant_price:
+          type: number
+          format: double
+          nullable: true
+        child_discount:
+          type: number
+          format: double
+          nullable: true
+        quint_room_price:
+          type: number
+          format: double
+          nullable: true
+        quad_room_price:
+          type: number
+          format: double
+          nullable: true
+        triple_room_price:
+          type: number
+          format: double
+          nullable: true
+        double_room_price:
+          type: number
+          format: double
+          nullable: true
+        sharing_bed_price:
+          type: number
+          format: double
           nullable: true
         organization:
           type: integer
@@ -8838,6 +8949,15 @@ components:
         bank:
           type: integer
           nullable: true
+        agent_bank:
+          type: integer
+          nullable: true
+        organization_bank:
+          type: integer
+          nullable: true
+        kuickpay_trn:
+          type: string
+          nullable: true
       required:
       - booking
       - branch
@@ -9081,6 +9201,14 @@ components:
           type: integer
           maximum: 2147483647
           minimum: -2147483648
+        owner_organization_id:
+          type: integer
+          maximum: 2147483647
+          minimum: -2147483648
+          nullable: true
+        reselling_allowed:
+          type: boolean
+          nullable: true
         weight:
           type: number
           format: double

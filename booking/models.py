@@ -114,6 +114,22 @@ class Booking(models.Model):
     inventory_owner_organization_id = models.IntegerField(blank=True, null=True)
     booking_organization_id = models.IntegerField(blank=True, null=True)
 
+    # New fields requested:
+    BOOKING_TYPE_CHOICES = [
+        ("TICKET", "Ticket"),
+        ("UMRAH", "Umrah Package"),
+        ("HOTEL", "Hotel"),
+        ("OTHER", "Other"),
+    ]
+    booking_type = models.CharField(max_length=20, choices=BOOKING_TYPE_CHOICES, default="TICKET")
+    is_full_package = models.BooleanField(default=False)
+
+    # payments: optional JSON array to store payment entries (mirrors Payment model or quick payload)
+    payments = models.JSONField(default=list, blank=True)
+
+    # journal_items: list of line items (name, price, qty, total) for bookkeeping
+    journal_items = models.JSONField(default=list, blank=True)
+
     reseller_commission = models.FloatField(default=0, blank=True, null=True)
     markup_by_reseller = models.FloatField(default=0, blank=True, null=True)
 
@@ -423,6 +439,14 @@ class Payment(models.Model):
     bank = models.ForeignKey(
         Bank, on_delete=models.CASCADE, related_name="payments", blank=True, null=True
     )
+    # Agent bank (optional) - bank used by the agent for this payment
+    agent_bank = models.ForeignKey(
+        Bank, on_delete=models.SET_NULL, related_name="agent_payments", blank=True, null=True
+    )
+    # Organization bank (optional) - bank account of the organization receiving the payment
+    organization_bank = models.ForeignKey(
+        Bank, on_delete=models.SET_NULL, related_name="organization_payments", blank=True, null=True
+    )
     amount = models.FloatField(default=0)
     date = models.DateTimeField(auto_now_add=True)
     remarks = models.TextField(blank=True, null=True)
@@ -431,6 +455,8 @@ class Payment(models.Model):
     )  # e.g., Pending, Completed, Failed
     image = models.ImageField(upload_to="media/payment_receipts", blank=True, null=True)
     transaction_number = models.CharField(max_length=100, blank=True, null=True)
+    # KuickPay transaction/reference number (optional)
+    kuickpay_trn = models.CharField(max_length=128, blank=True, null=True)
 class Sector(models.Model):
     departure_city = models.ForeignKey(
         City,
@@ -589,6 +615,8 @@ class AllowedReseller(models.Model):
         return f"{self.inventory_owner_company} → Resellers"
 class DiscountGroup(models.Model):
     name = models.CharField(max_length=255)
+    # optional group_type to classify discount groups (e.g., "SENIOR", "STUDENT", "CORPORATE")
+    group_type = models.CharField(max_length=100, blank=True, null=True)
     organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name="discount_groups")
     is_active = models.BooleanField(default=True)
 
@@ -628,7 +656,10 @@ class Discount(models.Model):
     )
     per_night_discount = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
 
-    discounted_hotels = models.IntegerField(blank=True, null=True)
+    # store discounted hotels as a proper ManyToMany relation to tickets.Hotels
+    discounted_hotels = models.ManyToManyField(
+        'tickets.Hotels', related_name='discounts', blank=True
+    )
 
     def __str__(self):
         return f"{self.discount_group.name} - {self.things}"
