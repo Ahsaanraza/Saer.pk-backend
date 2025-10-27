@@ -9,6 +9,7 @@ from organization.models import Organization, Agency, Branch
 from users.models import UserProfile
 from tickets.models import Hotels
 from datetime import datetime
+from decimal import Decimal
 from .models import (
     Booking,
     BookingHotelDetails,
@@ -688,9 +689,10 @@ class DiscountSerializer(serializers.ModelSerializer):
 
 
 class DiscountGroupSerializer(serializers.ModelSerializer):
-    discounts = DiscountSerializer(many=True, required=False)
+    # discounts are accepted on write, but for GET we return a compact object (see to_representation)
+    discounts = DiscountSerializer(many=True, write_only=True, required=False)
 
-    # allow a more convenient hotel_night_discounts payload shape as requested by the API
+    # allow a more convenient hotel_night_discounts payload shape as requested by the API (write-only)
     hotel_night_discounts = serializers.ListField(child=serializers.DictField(), write_only=True, required=False)
 
     class Meta:
@@ -740,13 +742,6 @@ class DiscountGroupSerializer(serializers.ModelSerializer):
         return discount_group
 
     def to_representation(self, instance):
-        """
-        Return the requested API shape:
-        - `discounts` as an object with `group_ticket_discount_amount` and `umrah_package_discount_amount` keys
-        - `hotel_night_discounts` as a list of objects where each object contains per-room-type keys and `discounted_hotels` list
-        """
-        data = super().to_representation(instance)
-
         # Build discounts object (single values)
         group_ticket_disc = instance.discounts.filter(things="group_ticket").first()
         umrah_disc = instance.discounts.filter(things="umrah_package").first()
@@ -763,7 +758,6 @@ class DiscountGroupSerializer(serializers.ModelSerializer):
                 else ""
             ),
         }
-        data["discounts"] = discounts_obj
 
         # Build hotel_night_discounts list by grouping hotel Discounts by the set of hotel IDs
         hotel_discs = instance.discounts.filter(things="hotel").prefetch_related("discounted_hotels")
@@ -777,11 +771,23 @@ class DiscountGroupSerializer(serializers.ModelSerializer):
             "all": "other_per_night_discount",
         }
 
-        # For each hotel discount row, associate its per_night_discount under the correct grouping
+        # helper to format hotel per-night discounts: drop ".00" for whole numbers
+        def _fmt_hotel_amount(val):
+            if val is None:
+                return ""
+            try:
+                dec = Decimal(str(val))
+            except Exception:
+                return str(val)
+            # integer value → return without decimal part
+            if dec == dec.to_integral():
+                return str(int(dec))
+            # otherwise remove trailing zeros
+            return format(dec.normalize(), 'f')
+
         for disc in hotel_discs:
             hotel_ids = tuple(sorted([h.id for h in disc.discounted_hotels.all()]))
             if hotel_ids not in grouped:
-                # initialize an entry with empty strings
                 grouped[hotel_ids] = {
                     "quint_per_night_discount": "",
                     "quad_per_night_discount": "",
@@ -794,13 +800,18 @@ class DiscountGroupSerializer(serializers.ModelSerializer):
 
             key = room_key_map.get(disc.room_type)
             if key:
-                grouped[hotel_ids][key] = (
-                    str(disc.per_night_discount) if disc.per_night_discount is not None else ""
-                )
+                grouped[hotel_ids][key] = _fmt_hotel_amount(disc.per_night_discount)
 
-        data["hotel_night_discounts"] = list(grouped.values())
-
-        return data
+        # Return an explicit minimal representation so no extra keys are included
+        return {
+            "id": instance.id,
+            "name": instance.name,
+            "group_type": instance.group_type,
+            "organization": instance.organization_id,
+            "is_active": instance.is_active,
+            "discounts": discounts_obj,
+            "hotel_night_discounts": list(grouped.values()),
+        }
 class MarkupSerializer(serializers.ModelSerializer):
     class Meta:
         model = Markup

@@ -9,11 +9,7 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        # Remove google_drive_link
-        migrations.RemoveField(
-            model_name="hotels",
-            name="google_drive_link",
-        ),
+        
         # Add new fields to Hotels
         migrations.AddField(
             model_name="hotels",
