@@ -1,6 +1,8 @@
 from django.db.models.signals import pre_save, post_save, post_delete
 from django.dispatch import receiver
 from django.db import transaction
+from django.db.transaction import TransactionManagementError
+from django.utils import timezone
 from django.db.models import F
 
 from .models import Booking, BookingTicketDetails
@@ -224,3 +226,138 @@ def booking_ticketdetails_post_delete(sender, instance, **kwargs):
     else:
         # fallback: decrement booked_tickets (safer default)
         _apply_ticket_changes(instance.ticket_id, booked_delta=-seats)
+
+
+# --- Hotel Outsourcing signals ---
+@receiver(post_save, sender='booking.HotelOutsourcing')
+def hotel_outsourcing_post_save(sender, instance, created, **kwargs):
+    """When a HotelOutsourcing is created, create a ledger entry and notify agent."""
+    try:
+        from organization.ledger_utils import find_account, create_entry_with_lines
+        from decimal import Decimal
+        # compute amount: price * quantity * nights
+        amount = Decimal(str(instance.outsource_cost or 0))
+
+        # find accounts: debit -> SUSPENSE (fallback), credit -> PAYABLE
+        debit_acc = find_account(instance.booking.organization_id, ['SUSPENSE'])
+        credit_acc = find_account(instance.booking.organization_id, ['PAYABLE'])
+
+        lines = []
+        if debit_acc:
+            lines.append({'account': debit_acc, 'debit': amount, 'credit': Decimal('0')})
+        if credit_acc:
+            lines.append({'account': credit_acc, 'debit': Decimal('0'), 'credit': amount})
+
+        # create ledger entry if we have at least one account
+        if lines:
+            le = create_entry_with_lines(
+                booking_no=instance.booking.booking_number,
+                service_type='hotel',
+                narration=f"Outsourced Hotel for Booking #{instance.booking.booking_number}",
+                metadata={'outsourcing_id': instance.id, 'organization': instance.booking.organization_id, 'branch': instance.booking.branch_id},
+                internal_notes=[f"Hotel Outsource created by {getattr(instance.created_by, 'username', None)}"],
+                created_by=getattr(instance, 'created_by', None),
+                lines=lines,
+            )
+            if le:
+                # avoid recursion / nested signal side-effects by updating via queryset
+                # this performs a direct UPDATE and does not emit model signals
+                instance.__class__.objects.filter(pk=instance.pk).update(
+                    ledger_entry_id=le.id,
+                    updated_at=timezone.now(),
+                )
+
+        # mark booking hotel detail as outsourced already handled by serializer; ensure booking flag set
+        try:
+            instance.booking.is_outsourced = True
+            instance.booking.save(update_fields=['is_outsourced'])
+        except Exception:
+            pass
+
+        # Agent notification and SystemLog: schedule after transaction commits to
+        # avoid performing DB writes inside a broken/ongoing atomic block.
+        try:
+            agent_id = getattr(instance.booking, 'user_id', None)
+            booking_pk = getattr(instance.booking, 'id', None)
+            org_id = getattr(instance.booking, 'organization_id', None)
+            branch_id = getattr(instance.booking, 'branch_id', None)
+            hotel_name = instance.hotel_name
+
+            def _notify_and_log():
+                try:
+                    # lazy import to avoid circulars
+                    from notifications.utils import send_agent_message
+                    from logs.models import SystemLog
+
+                    message = f"Your passenger’s hotel has been assigned from an external source: {hotel_name}."
+                    sent = send_agent_message(agent_id, message, booking_id=booking_pk)
+
+                    SystemLog.objects.create(
+                        action_type="OUTSOURCED_HOTEL_ASSIGNED",
+                        model_name="HotelOutsourcing",
+                        record_id=instance.id,
+                        organization_id=org_id,
+                        branch_id=branch_id,
+                        user_id=agent_id,
+                        description=message,
+                        status="success" if sent else "failed",
+                    )
+
+                    # mark agent_notified via queryset update to avoid another signal
+                    if not instance.agent_notified:
+                        instance.__class__.objects.filter(pk=instance.pk).update(agent_notified=True)
+                except Exception:
+                    # best-effort — do not raise from on_commit callbacks
+                    return
+
+            # Try to run immediately. If we are inside a broken/ongoing
+            # atomic block, TransactionManagementError will be raised and
+            # we schedule the callback to run after commit instead.
+            try:
+                _notify_and_log()
+            except TransactionManagementError:
+                try:
+                    transaction.on_commit(_notify_and_log)
+                except Exception:
+                    # last-resort: swallow
+                    pass
+        except Exception:
+            # best-effort — do not block
+            pass
+    except Exception:
+        # swallow to avoid breaking save during migrations
+        pass
+
+
+@receiver(post_delete, sender='booking.HotelOutsourcing')
+def hotel_outsourcing_post_delete(sender, instance, **kwargs):
+    """When outsourcing is deleted, try to mark ledger as reversed/zeroed (best-effort)."""
+    try:
+        from organization.ledger_utils import _lazy_models
+        Account, LedgerEntry, LedgerLine = _lazy_models()
+        if instance.ledger_entry_id and LedgerEntry:
+            le = LedgerEntry.objects.filter(pk=instance.ledger_entry_id).first()
+            if le and not le.reversed:
+                # create a reversing entry
+                rev = LedgerEntry.objects.create(
+                    booking_no=le.booking_no,
+                    service_type=le.service_type,
+                    narration=f"Reversal for Outsourcing #{instance.id}",
+                    metadata={'reversal_of': le.id},
+                    created_by=None,
+                )
+                # mirror lines reversed
+                for l in le.lines.all():
+                    LedgerLine.objects.create(
+                        ledger_entry=rev,
+                        account=l.account,
+                        debit=l.credit,
+                        credit=l.debit,
+                        final_balance=l.final_balance, # best-effort
+                    )
+                le.reversed = True
+                le.reversed_of = rev
+                le.save()
+    except Exception:
+        pass
+    

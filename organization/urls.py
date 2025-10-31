@@ -1,5 +1,7 @@
 from django.urls import path, include
-from .views import OrganizationViewSet, BranchViewSet,AgencyViewSet, OrganizationLinkViewSet
+from .views import OrganizationViewSet, BranchViewSet,AgencyViewSet, OrganizationLinkViewSet, AgencyProfileView
+from .views import RuleCreateView, RuleListView, RuleUpdateView, RuleDeleteView
+from .views import WalkInCreateView, WalkInListView, WalkInUpdateStatusView, WalkInSummaryView
 from rest_framework import routers
 
 
@@ -12,4 +14,14 @@ router.register(r"organization-links", OrganizationLinkViewSet, basename="organi
 
 urlpatterns = [
     path("api/", include(router.urls)),
+    path("api/agency/profile", AgencyProfileView.as_view(), name="agency-profile"),
+    path("api/rules/create", RuleCreateView.as_view(), name="rules-create"),
+    path("api/rules/list", RuleListView.as_view(), name="rules-list"),
+    path("api/rules/update/<int:id>", RuleUpdateView.as_view(), name="rules-update"),
+    path("api/rules/delete/<int:id>", RuleDeleteView.as_view(), name="rules-delete"),
+    # Walk-in booking endpoints
+    path("api/walkin/create", WalkInCreateView.as_view(), name="walkin-create"),
+    path("api/walkin/list", WalkInListView.as_view(), name="walkin-list"),
+    path("api/walkin/update-status/<int:booking_id>", WalkInUpdateStatusView.as_view(), name="walkin-update-status"),
+    path("api/walkin/summary", WalkInSummaryView.as_view(), name="walkin-summary"),
 ]

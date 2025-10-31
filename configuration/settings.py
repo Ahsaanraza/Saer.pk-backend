@@ -49,7 +49,15 @@ INSTALLED_APPS = [
     "organization",
     "packages",
     "tickets",
+    "universal",  
     "booking",
+    "blog",
+    "ledger",
+    "commissions",
+    "area_leads",
+    "leads",
+    "logs",
+    "promotion_center",
 ]
 
 # ----------------------------------------------------
@@ -59,10 +67,13 @@ MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "corsheaders.middleware.CorsMiddleware",
-    "debug_toolbar.middleware.DebugToolbarMiddleware",
+    "debug_toolbar.middleware.DebugToolbarMiddle"
+    "ware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
+    # System logging middleware: captures POST/PUT/PATCH/DELETE actions
+    "logs.middleware.SystemLogMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
@@ -156,6 +167,16 @@ REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": (
         "rest_framework.permissions.IsAuthenticated",
     ),
+    # Throttling: central config for named scopes (used by custom throttles)
+    "DEFAULT_THROTTLE_CLASSES": [
+        "rest_framework.throttling.AnonRateThrottle",
+    ],
+    "DEFAULT_THROTTLE_RATES": {
+        # named scope used by PublicBookingRateThrottle (if you prefer central config)
+        "public_booking": "10/min",
+        # default anonymous throttle if applied globally
+        "anon": "100/min",
+    },
 }
 
 SIMPLE_JWT = {

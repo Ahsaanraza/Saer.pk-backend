@@ -1,0 +1,107 @@
+Universal Change Log — Receive Payment → Ledger Integration
+Date: 2025-10-31
+
+Purpose
+-------
+This single-file summary documents all changes, fixes, new code, and behavior introduced while implementing the "Receive Payment" workflow and ledger integration. Use this as a one-stop reference for reviewers, QA, and operations.
+
+High-level summary
+------------------
+- Objective: Add a Receive Payment flow where payments can be approved/rejected; approval posts atomic debit/credit ledger entries and maintains an audit trail. Support SAR→PKR conversion where booking items are priced in SAR. Provide reconciliation for payments missed by signals (e.g., created with bulk_create).
+- Approach: Implement changes across `booking` and `ledger` apps, centralize posting logic on the `Payment` model, add action logging, write unit tests, add a reconcile management command, and document the work.
+
+Files added / edited (what & why)
+---------------------------------
+- booking/models.py
+  - Added `transaction_type` (choices: agent_to_branch, area_agent_to_org, branch_to_org, org_to_org).
+  - Auto-generate `transaction_number` in `Payment.save()` when missing. Format: PAY-<ORGID>-YYYYMMDD-<seq4>.
+  - Added `PaymentActionLog` model to store action history (created, approved, rejected, ledger_entry_created, payment_post_failed).
+  - Added `Payment.post_to_ledger()` which contains the ledger posting logic (idempotency, transaction_type routing, SAR→PKR conversion, account creation, ledger entry and lines creation, and action logging). This centralizes posting behavior on the Payment model.
+
+- ledger/signals.py
+  - Simplified `auto_post_payment` signal: delegates to `instance.post_to_ledger()` if available. Keeps the post-save hook but moves the implementation into the Payment model.
+
+- ledger/currency_utils.py
+  - Rewritten conversion utilities to use Decimal and quantize to 2 dp for currency precision. Exposes `convert_sar_to_pkr(org, amount)` and `get_riyal_rate_for_org(org)`.
+
+- booking/views.py
+  - `PaymentViewSet.approve`: enforces permission (staff or finance_managers), sets status -> Completed, saves (triggers post_save), and writes `PaymentActionLog(payment_approved)`.
+  - `PaymentViewSet.reject`: sets status -> Rejected and writes `PaymentActionLog(payment_rejected)`.
+
+- booking/management/commands/reconcile_payments.py
+  - New management command to scan for completed payments without corresponding ledger entries and post them. Dry-run by default; `--apply` to perform posting; `--limit` to bound the run.
+  - Uses `Payment.post_to_ledger()` when present (fallback to signal handler if not).
+
+- booking/tests/test_payments.py
+  - Unit tests added:
+    * test_approve_creates_ledger_and_action_log: assert ledger entry, two ledger lines (debit+credit), and PaymentActionLog 'ledger_entry_created' are created on approve.
+    * test_posting_failure_creates_payment_post_failed_log: simulates failure during ledger posting and asserts PaymentActionLog 'payment_post_failed' is created.
+    * test_reconcile_command_posts_missing_ledgers: simulates bulk_create created payment and confirms reconcile command posts a ledger entry when run with `--apply`.
+
+- docs/RECEIVE_PAYMENT_IMPLEMENTATION.md
+  - Detailed markdown documentation mapping client requests to code and how to verify.
+
+- docs/RECEIVE_PAYMENT_SUMMARY.txt
+  - Compact plaintext summary pointing to the detailed doc.
+
+What we fixed / why
+-------------------
+- Migration sanity: One environment had schema already applied — a migration file was added and faked-applied to align migration history without altering existing tables.
+- Currency precision: conversions switched to Decimal and quantize(Decimal('0.01')) to avoid float rounding.
+- Idempotency & atomicity: ledger posting checks `LedgerEntry.metadata` for `payment_id` to avoid duplicate postings; posting runs inside `transaction.atomic()` and uses `Account.objects.select_for_update()` to lock balances.
+- Audit logging: added `PaymentActionLog` and appended short `[ledger_posted:<id>]` traces to `payment.remarks` as a fallback when logging within the posting transaction fails.
+
+Behavior & flow (after these changes)
+-------------------------------------
+1) Create Payment (may be created by API or via Booking serializers). If status is 'Completed' at save, the signal will call `post_to_ledger()`.
+2) Approve endpoint: sets Payment.status='Completed' and saves; the posting flow runs.
+3) Posting flow (Payment.post_to_ledger):
+   - Verifies status is Completed/approved.
+   - Skips if a LedgerEntry with metadata.payment_id already exists (idempotent).
+   - Groups booking items by `inventory_owner_organization` and posts one LedgerEntry per owner org.
+   - For items priced in SAR (is_price_pkr == False) uses `convert_sar_to_pkr()` to convert to PKR.
+   - Creates LedgerEntry with `metadata` including: payment_id, owner_org_id, transaction_type, and conversion fields (when applicable: conversion_rate, original_amount_sar).
+   - Creates two LedgerLine rows: debit (payer account) and credit (owner org account), updates Account balances.
+   - Creates a `PaymentActionLog` with action 'ledger_entry_created' or 'payment_post_failed' on errors. Appends a short trace to `payment.remarks` as fallback.
+
+Data formats & where to find conversion data
+-------------------------------------------
+- `LedgerEntry.metadata` (JSONField): stores structured data. Example after posting:
+  {
+    "payment_id": 123,
+    "owner_org_id": 45,
+    "transaction_type": "agent_to_branch",
+    "conversion_rate": "75.00",            # optional, string for JSON safety
+    "original_amount_sar": "100.00"        # optional
+  }
+- `LedgerEntry.internal_notes` (JSON list): contains human readable audit strings, e.g.:
+  ["Auto-posted payment for org 45 via Payment id 123 by payer 11 at 2025-10-30 14:50:39", "[ledger_posted:2]"]
+
+Important caveats
+-----------------
+- `booking` serializers still use `bulk_create` for nested payments. `bulk_create` bypasses `post_save` signals. Use `reconcile_payments --apply` to post ledger entries for payments created via `bulk_create`.
+- The conversion details are stored in `LedgerEntry.metadata` (structured) and not expanded as columns. If you need typed/queryable conversion fields, we can add Decimal fields to `LedgerEntry` with a migration.
+
+How to verify (commands)
+------------------------
+- Run verify script used during development:
+  & ".\.venv\Scripts\Activate.ps1"
+  python -u -c "import runpy; runpy.run_path('scripts/verify_payment_approve_and_ledger.py')"
+- Run reconcile dry-run:
+  python manage.py reconcile_payments
+- Apply reconciliation:
+  python manage.py reconcile_payments --apply --limit 50
+- Run booking tests added:
+  python manage.py test booking
+
+Next recommended steps
+----------------------
+1) (Optional) Replace `bulk_create` in Booking serializer to save Payments one-by-one so signals run immediately. This is a code change with potential performance impact.
+2) (Optional) Add typed columns to `LedgerEntry` for conversion_rate and original_amount_sar if you need SQL-level queries on those fields.
+3) Add CI pipeline integration to run the booking tests automatically on PRs.
+
+Contact & notes
+---------------
+If you want any of the optional changes implemented immediately (e.g., append readable conversion line to `internal_notes` or add typed DB fields), say which one and I will implement it and run the test suite.
+
+End of universal log.

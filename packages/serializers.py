@@ -318,6 +318,86 @@ class UmrahPackageSerializer(ModelSerializer):
 
         return TicketSerializer(qs, many=True).data
 
+
+class PublicUmrahPackageHotelSummarySerializer(serializers.ModelSerializer):
+    hotel_name = serializers.CharField(source="hotel.name", read_only=True)
+
+    class Meta:
+        model = UmrahPackageHotelDetails
+        fields = ["hotel_name", "check_in_date", "check_out_date", "number_of_nights"]
+
+
+class PublicUmrahPackageListSerializer(serializers.ModelSerializer):
+    price = serializers.SerializerMethodField()
+    hotels = PublicUmrahPackageHotelSummarySerializer(source="hotel_details", many=True, read_only=True)
+
+    class Meta:
+        model = UmrahPackage
+        fields = [
+            "id",
+            "title",
+            "price",
+            "total_seats",
+            "left_seats",
+            "booked_seats",
+            "confirmed_seats",
+            "available_start_date",
+            "available_end_date",
+            "reselling_allowed",
+            "is_public",
+            "hotels",
+        ]
+
+    def get_price(self, obj):
+        # prefer explicit price_per_person, fallback to adult visa price + service charge
+        if getattr(obj, "price_per_person", None):
+            return obj.price_per_person
+        # try adult price fields
+        try:
+            return obj.adault_visa_price + (obj.adault_service_charge or 0)
+        except Exception:
+            return None
+
+
+class PublicUmrahPackageDetailSerializer(ModelSerializer):
+    hotels = PublicUmrahPackageHotelSummarySerializer(source="hotel_details", many=True, read_only=True)
+    transport = UmrahPackageTransportDetailsSerializer(source="transport_details", many=True, read_only=True)
+    tickets = UmrahPackageTicketDetailsSerializer(source="ticket_details", many=True, read_only=True)
+
+    class Meta:
+        model = UmrahPackage
+        fields = [
+            "id",
+            "title",
+            "rules",
+            "price",
+            "price_per_person",
+            "adault_visa_price",
+            "child_visa_price",
+            "infant_visa_price",
+            "total_seats",
+            "left_seats",
+            "booked_seats",
+            "confirmed_seats",
+            "available_start_date",
+            "available_end_date",
+            "reselling_allowed",
+            "is_public",
+            "hotels",
+            "transport",
+            "tickets",
+        ]
+
+    price = serializers.SerializerMethodField()
+
+    def get_price(self, obj):
+        if getattr(obj, "price_per_person", None):
+            return obj.price_per_person
+        try:
+            return obj.adault_visa_price + (obj.adault_service_charge or 0)
+        except Exception:
+            return None
+
     def get_adult_price(self, obj):
         # keep the original (typo'd) field name as the source
         return getattr(obj, "adault_visa_price", None)

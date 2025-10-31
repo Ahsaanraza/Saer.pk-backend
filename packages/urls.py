@@ -16,6 +16,8 @@ from .views import (
     FoodPriceViewSet,
     ZiaratPriceViewSet,
     AllPricesAPIView,
+    PublicUmrahPackageListAPIView,
+    PublicUmrahPackageDetailAPIView,
 )
 
 router = DefaultRouter()
@@ -37,4 +39,7 @@ router.register(r'custom-umrah-packages', CustomUmrahPackageViewSet, basename='c
 urlpatterns = [
     path('api/', include(router.urls)),  # ✅ your app’s API is now under /api/
     path('api/all-prices/', AllPricesAPIView.as_view(), name='all-prices'),
+    # Public package browsing endpoints
+    path('api/public/packages/', PublicUmrahPackageListAPIView.as_view(), name='public-packages-list'),
+    path('api/public/packages/<str:identifier>/', PublicUmrahPackageDetailAPIView.as_view(), name='public-packages-detail'),
 ]

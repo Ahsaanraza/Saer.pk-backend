@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from django.contrib.auth.models import User
 import uuid
 from django.utils.timezone import now
 from organization.serializers import OrganizationSerializer,AgencySerializer, BranchSerializer
@@ -32,9 +33,278 @@ from .models import (
     AllowedReseller,
     DiscountGroup,
     Discount,
-    Markup
+    Markup,
+    BookingCallRemark
 )
 from django.db import transaction
+
+# --- Public (read-only) serializers for the public booking status API ---
+class PublicPersonSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = BookingPersonDetail
+        fields = (
+            "person_title",
+            "first_name",
+            "last_name",
+            "age_group",
+            "passport_number",
+            "date_of_birth",
+        )
+
+
+class PublicHotelDetailsSerializer(serializers.ModelSerializer):
+    # show related hotel basic info if available
+    hotel = HotelsSerializer(read_only=True)
+
+    class Meta:
+        model = BookingHotelDetails
+        fields = (
+            "hotel",
+            "self_hotel_name",
+            "check_in_date",
+            "check_out_date",
+            "number_of_nights",
+            "room_type",
+            "sharing_type",
+        )
+
+
+class PublicTransportSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = BookingTransportDetails
+        fields = (
+            "shirka",
+            "vehicle_type",
+            "voucher_no",
+            "brn_no",
+        )
+
+
+class PublicTicketSerializer(serializers.ModelSerializer):
+    trip_details = serializers.SerializerMethodField()
+
+    class Meta:
+        model = BookingTicketDetails
+        fields = (
+            "pnr",
+            "trip_details",
+            "seats",
+            "status",
+        )
+
+    def get_trip_details(self, obj):
+        out = []
+        try:
+            for t in getattr(obj, 'trip_details').all():
+                out.append({
+                    'departure_date_time': t.departure_date_time,
+                    'arrival_date_time': t.arrival_date_time,
+                    'departure_city': getattr(t.departure_city, 'name', None) if getattr(t, 'departure_city', None) else None,
+                    'arrival_city': getattr(t.arrival_city, 'name', None) if getattr(t, 'arrival_city', None) else None,
+                    'trip_type': t.trip_type,
+                })
+        except Exception:
+            pass
+        return out
+
+
+class PublicBookingSerializer(serializers.ModelSerializer):
+    person_details = PublicPersonSerializer(many=True, read_only=True)
+    hotel_details = PublicHotelDetailsSerializer(many=True, read_only=True)
+    transport_details = PublicTransportSerializer(many=True, read_only=True)
+    ticket_details = PublicTicketSerializer(many=True, read_only=True)
+    public_ref = serializers.CharField(read_only=True)
+    booking_number = serializers.CharField(read_only=True)
+    creation_date = serializers.DateTimeField(source="date", read_only=True)
+    service_summary = serializers.SerializerMethodField()
+    total_paid = serializers.SerializerMethodField()
+    remaining_balance = serializers.SerializerMethodField()
+    uploaded_documents = serializers.SerializerMethodField()
+    status_timeline = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Booking
+        fields = (
+            "booking_number",
+            "public_ref",
+            "creation_date",
+            "person_details",
+            "service_summary",
+            "booking_type",
+            "hotel_details",
+            "transport_details",
+            "ticket_details",
+            "payment_status",
+            "status",
+            "total_paid",
+            "remaining_balance",
+            "uploaded_documents",
+        )
+
+    def get_service_summary(self, obj):
+        # Minimal public-facing summary
+        out = {
+            "booking_type": obj.booking_type,
+            "category": obj.category,
+            "is_full_package": obj.is_full_package,
+        }
+        # package name/duration
+        try:
+            if getattr(obj, 'umrah_package', None):
+                out['package_name'] = getattr(obj.umrah_package, 'title', None) or getattr(obj.umrah_package, 'name', None)
+                # approximate duration from hotel nights
+                nights = 0
+                for h in getattr(obj, 'hotel_details').all():
+                    nights += int(getattr(h, 'number_of_nights', 0) or 0)
+                out['duration_nights'] = nights
+        except Exception:
+            pass
+
+        # hotel names and transport summary
+        try:
+            hotels = []
+            for h in getattr(obj, 'hotel_details').all():
+                hotels.append(h.self_hotel_name or (getattr(h.hotel, 'name', None) if getattr(h, 'hotel', None) else None))
+            out['hotel_names'] = [x for x in hotels if x]
+        except Exception:
+            out['hotel_names'] = []
+
+        try:
+            transports = []
+            for t in getattr(obj, 'transport_details').all():
+                transports.append({
+                    'vehicle_type': getattr(t, 'vehicle_type', None),
+                    'voucher_no': getattr(t, 'voucher_no', None),
+                })
+            out['transport_summary'] = transports
+        except Exception:
+            out['transport_summary'] = []
+
+        # visa status (public-facing)
+        try:
+            out['visa_status'] = getattr(obj, 'visa_status', None)
+        except Exception:
+            out['visa_status'] = None
+
+        return out
+
+    def get_status_timeline(self, obj):
+        timeline = []
+        try:
+            # Booked
+            timeline.append({'status': 'booked', 'at': getattr(obj, 'date', None)})
+            # Payments (completed)
+            if hasattr(obj, 'payment_details'):
+                for p in obj.payment_details.filter(status__in=['Completed', 'completed']):
+                    timeline.append({'status': 'paid', 'at': getattr(p, 'date', None), 'amount': float(getattr(p, 'amount', 0) or 0)})
+            # Confirmed
+            if getattr(obj, 'status', None) and str(getattr(obj, 'status')).lower() == 'confirmed':
+                # use last payment date or booking date as proxy
+                last_paid = None
+                try:
+                    last_paid = obj.payment_details.filter(status__in=['Completed', 'completed']).order_by('-date').first()
+                except Exception:
+                    last_paid = None
+                timeline.append({'status': 'confirmed', 'at': getattr(last_paid, 'date', None) or getattr(obj, 'date', None)})
+        except Exception:
+            pass
+        return timeline
+
+    def get_total_paid(self, obj):
+        # try fields on model first, fall back to summing payments
+        try:
+            if getattr(obj, "paid_payment", None) not in (None, ""):
+                return float(obj.paid_payment or 0)
+            # try JSON payments
+            if isinstance(obj.payments, (list, tuple)) and obj.payments:
+                return sum([float(p.get("amount", 0) or 0) for p in obj.payments])
+            # try related payment_details
+            if hasattr(obj, "payment_details"):
+                return sum([float(p.amount or 0) for p in obj.payment_details.all()])
+        except Exception:
+            return 0.0
+        return 0.0
+
+    def get_remaining_balance(self, obj):
+        try:
+            if getattr(obj, "pending_payment", None) not in (None, ""):
+                return float(obj.pending_payment or 0)
+            total = float(obj.total_amount or 0)
+            paid = float(self.get_total_paid(obj) or 0)
+            return max(0.0, total - paid)
+        except Exception:
+            return None
+
+    def get_uploaded_documents(self, obj):
+        # Return a minimal list of uploaded document info if available. Defensive — do not expose internal paths.
+        docs = []
+        try:
+            # example: look for voucher / passport fields on booking or persons
+            # Booking may store attachments in JSON fields; fall back to person passport_picture
+            if hasattr(obj, "person_details"):
+                for p in obj.person_details.all():
+                    if getattr(p, "passport_picture", None):
+                        docs.append({"type": "passport_picture", "filename": getattr(p.passport_picture, "name", None), "url": getattr(p.passport_picture, "url", None)})
+            # Booking-level attachments could exist in journal_items/payments — skip those for privacy
+        except Exception:
+            pass
+        return docs
+
+
+# --- Public (write) serializers for creating bookings/payments ---
+class PublicBookingCreateSerializer(serializers.Serializer):
+    umrah_package_id = serializers.IntegerField()
+    total_pax = serializers.IntegerField()
+    total_adult = serializers.IntegerField(required=False, default=0)
+    total_child = serializers.IntegerField(required=False, default=0)
+    total_infant = serializers.IntegerField(required=False, default=0)
+    contact_name = serializers.CharField(max_length=255)
+    contact_phone = serializers.CharField(max_length=50)
+    contact_email = serializers.EmailField(required=False, allow_null=True, allow_blank=True)
+    pay_now = serializers.BooleanField(required=False, default=False)
+    pay_amount = serializers.DecimalField(max_digits=12, decimal_places=2, required=False, allow_null=True)
+
+    def validate(self, data):
+        from packages.models import UmrahPackage
+
+        try:
+            pkg = UmrahPackage.objects.get(pk=data['umrah_package_id'])
+        except UmrahPackage.DoesNotExist:
+            raise serializers.ValidationError({"umrah_package_id": "Invalid package id"})
+
+        if not pkg.is_public:
+            raise serializers.ValidationError({"umrah_package_id": "Package is not available for public booking"})
+
+        total = int(data.get('total_pax') or 0)
+        left = int(pkg.left_seats or 0)
+        if total <= 0:
+            raise serializers.ValidationError({"total_pax": "Must be greater than zero"})
+        if left < total:
+            raise serializers.ValidationError({"total_pax": f"Only {left} seats left"})
+
+        return data
+
+    class Meta:
+        fields = '__all__'
+
+
+class PublicPaymentCreateSerializer(serializers.Serializer):
+    booking_number = serializers.CharField()
+    amount = serializers.DecimalField(max_digits=12, decimal_places=2)
+    method = serializers.CharField(max_length=50, default="online")
+    transaction_number = serializers.CharField(max_length=128, required=False, allow_blank=True, allow_null=True)
+
+    def validate(self, data):
+        from .models import Booking
+
+        try:
+            Booking.objects.get(booking_number=data['booking_number'])
+        except Booking.DoesNotExist:
+            raise serializers.ValidationError({"booking_number": "Invalid booking_number"})
+        return data
+
+    class Meta:
+        fields = '__all__'
 
 # --- Child serializers ---
 
@@ -272,6 +542,61 @@ class PaymentSerializer(serializers.ModelSerializer):
         model = Payment
         fields = "__all__"
         extra_kwargs = {"booking": {"read_only": True}}
+
+
+class HotelOutsourcingSerializer(serializers.ModelSerializer):
+    booking_id = serializers.PrimaryKeyRelatedField(queryset=Booking.objects.all(), source='booking', write_only=True)
+    booking_hotel_detail_id = serializers.PrimaryKeyRelatedField(queryset=BookingHotelDetails.objects.all(), source='booking_hotel_detail', required=False, allow_null=True, write_only=True)
+    outsource_cost = serializers.SerializerMethodField(read_only=True)
+
+    class Meta:
+        model = None  # placeholder; we will import locally to avoid circular imports
+        fields = [
+            'id', 'booking_id', 'booking_hotel_detail_id', 'hotel_name', 'source_company', 'check_in_date', 'check_out_date',
+            'room_type', 'room_no', 'price', 'quantity', 'number_of_nights', 'currency', 'remarks', 'is_paid', 'agent_notified',
+            'created_by', 'created_at', 'updated_at', 'is_deleted', 'outsource_cost', 'ledger_entry_id'
+        ]
+
+    def __init__(self, *args, **kwargs):
+        # avoid circular import issues by binding model at runtime
+        from .models import HotelOutsourcing
+        self.Meta.model = HotelOutsourcing
+        super().__init__(*args, **kwargs)
+
+    def get_outsource_cost(self, obj):
+        return obj.outsource_cost
+
+    def create(self, validated_data):
+        from .models import HotelOutsourcing
+        from django.db import transaction
+
+        booking = validated_data.get('booking')
+        booking_hotel_detail = validated_data.get('booking_hotel_detail', None)
+
+        with transaction.atomic():
+            ho = HotelOutsourcing.objects.create(**validated_data)
+
+            # mark booking as outsourced
+            booking.is_outsourced = True
+            booking.save(update_fields=['is_outsourced'])
+
+            # update booking hotel detail if provided
+            if booking_hotel_detail:
+                booking_hotel_detail.self_hotel_name = ho.hotel_name
+                booking_hotel_detail.check_in_date = ho.check_in_date or booking_hotel_detail.check_in_date
+                booking_hotel_detail.check_out_date = ho.check_out_date or booking_hotel_detail.check_out_date
+                booking_hotel_detail.room_type = ho.room_type or booking_hotel_detail.room_type
+                booking_hotel_detail.outsourced_hotel = True
+                booking_hotel_detail.save()
+
+        return ho
+
+    def update(self, instance, validated_data):
+        # allow patching payment status and agent_notified only via serializer
+        for attr, val in validated_data.items():
+            setattr(instance, attr, val)
+        instance.save()
+        return instance
 
 
 # --- Main Booking Serializer ---
@@ -826,4 +1151,22 @@ class MarkupSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
+
+class BookingCallRemarkSerializer(serializers.ModelSerializer):
+    created_by = UserSerializer(read_only=True)
+    created_by_id = serializers.PrimaryKeyRelatedField(
+        queryset=User.objects.all(), source="created_by", write_only=True, required=False
+    )
+
+    class Meta:
+        model = BookingCallRemark
+        fields = [
+            "id",
+            "booking",
+            "created_by",
+            "created_by_id",
+            "remark_text",
+            "created_at",
+        ]
+        read_only_fields = ["id", "created_by", "created_at"]
 

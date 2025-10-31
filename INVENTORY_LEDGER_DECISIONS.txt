@@ -1,0 +1,68 @@
+INVENTORY LEDGER — FINAL DECISIONS (2025-10-28)
+
+This document summarizes the final technical and business decisions for the hotel/inventory ledger link and reporting setup.
+
+1️⃣ inventory_owner_organization_id Field
+----------------------------------------
+- Add `inventory_owner_organization_id` (ForeignKey to Organization) to all booking item models (hotel, ticket, umrah package, transport, etc.).
+- If a base model (e.g., BookingItem) exists, add it there.
+- Example:
+  inventory_owner_organization = models.ForeignKey(
+      "organization.Organization",
+      on_delete=models.PROTECT,
+      null=True,
+      blank=True,
+      related_name="owned_inventory"
+  )
+
+2️⃣ Detecting Inventory Owner
+----------------------------
+- System auto-assigns owner org from vendor/hotel/airline/package:
+  - Hotel: use Hotel.vendor.organization_id
+  - Ticket: use Airline.organization_id
+  - Package: use Package.owner_org_id
+- No manual override allowed. Only system-level assignment during booking creation/update.
+
+3️⃣ Multi-Org Ledger Flow
+------------------------
+- If a booking involves multiple owner orgs, system creates all required ledger entries in a single atomic transaction.
+- Example: Booking with Hotel A (Saer.pk) and Hotel B (Al Madina Group) →
+  - Agent ↔ Saer.pk
+  - Saer.pk ↔ Al Madina Group
+- All entries posted atomically to prevent partial posting.
+
+4️⃣ Internal Notes Storage
+-------------------------
+- Add `internal_notes` field to LedgerEntry (JSONField, default=list).
+- Store as a list of text lines, e.g.:
+  [
+    "[2025-10-28 12:45] Payment auto-posted for Hotel Al Madina.",
+    "[2025-10-28 12:46] Inventory owner: Saer.pk | Buyer: Al Madina Group"
+  ]
+- No extra join tables needed; fast for audit and reporting.
+
+5️⃣ Currency Conversion
+----------------------
+- Use dynamic rate from an ExchangeRate table or API.
+- Table fields: from_currency, to_currency, rate, updated_at.
+- On posting, auto-convert if buyer and owner orgs use different currencies.
+
+6️⃣ GET Endpoints & Pagination
+-----------------------------
+- For now, endpoints return full lists (no pagination).
+- Support query filters: organization_id, branch_id, agent_id, date_from, date_to.
+- Pagination can be added later if needed.
+
+🧩 Final Summary Table
+----------------------
+| Topic                        | Decision                                    |
+|------------------------------|----------------------------------------------|
+| Add inventory_owner_org_id   | ✅ Add to all booking item models            |
+| Detect inventory owner       | ✅ Auto from vendor/hotel organization       |
+| Multi-org ledger flow        | ✅ All entries in one atomic transaction     |
+| Internal notes               | ✅ JSON list field on LedgerEntry            |
+| Currency conversion          | ✅ Use dynamic exchange rate table/API       |
+| GET endpoints                | ✅ Full list, filter-based, no pagination    |
+
+Prepared by: Automated coding assistant
+Date: 2025-10-28

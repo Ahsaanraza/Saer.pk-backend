@@ -1,7 +1,35 @@
+
+from django.db import models
+import hmac
+import hashlib
+import secrets
+from django.conf import settings
+from django.contrib.auth.models import User
+from organization.models import Organization, Branch, Agency
+from packages.models import TransportSectorPrice, City, Shirka
+
+# BookingCallRemark model for call remarks on bookings
+class BookingCallRemark(models.Model):
+    booking = models.ForeignKey('booking.Booking', on_delete=models.CASCADE, related_name='call_remarks')
+    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True)
+    remark_text = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
 from django.db import models
 from django.contrib.auth.models import User
 from organization.models import Organization, Branch, Agency
 from packages.models import TransportSectorPrice, City, Shirka
+
+
+# ...existing code...
+
+# Place BookingCallRemark model after all imports and before other model classes
+
+class BookingCallRemark(models.Model):
+    booking = models.ForeignKey('booking.Booking', on_delete=models.CASCADE, related_name='call_remarks')
+    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True)
+    remark_text = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
 
 # Create your models here.
 
@@ -123,6 +151,15 @@ class Booking(models.Model):
     ]
     booking_type = models.CharField(max_length=20, choices=BOOKING_TYPE_CHOICES, default="TICKET")
     is_full_package = models.BooleanField(default=False)
+    # Public booking flags and metadata
+    is_public_booking = models.BooleanField(default=False)
+    created_by_user_type = models.CharField(max_length=30, blank=True, null=True)
+    # invoice / external booking number (unique public-facing invoice id)
+    invoice_no = models.CharField(max_length=64, unique=True, blank=True, null=True)
+    # accumulate payments (use decimal for accuracy)
+    total_payment_received = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    # Flag to indicate if any part of booking uses external/outsourced services (hotels)
+    is_outsourced = models.BooleanField(default=False)
 
     # payments: optional JSON array to store payment entries (mirrors Payment model or quick payload)
     payments = models.JSONField(default=list, blank=True)
@@ -132,6 +169,80 @@ class Booking(models.Model):
 
     reseller_commission = models.FloatField(default=0, blank=True, null=True)
     markup_by_reseller = models.FloatField(default=0, blank=True, null=True)
+    # Public secure reference for read-only public access (QR / hashed link)
+    public_ref = models.CharField(max_length=128, unique=True, blank=True, null=True)
+    # URL encoded in voucher QR (public-facing). Populated on save if possible.
+    voucher_qr_url = models.CharField(max_length=512, blank=True, null=True)
+
+    def generate_public_ref(self):
+        """Generate a unique HMAC-SHA256 based public reference using SECRET_KEY and booking_number.
+
+        Format: INV-{booking_number}-{HEX}
+        Only first 12 chars of digest are kept for readability.
+        Ensures uniqueness by appending a counter if collision occurs (rare).
+        """
+        # base value uses booking_number if available, else fallback to id/secret
+        base = (self.booking_number or str(self.id) or secrets.token_hex(8)).encode()
+        key = settings.SECRET_KEY.encode()
+        digest = hmac.new(key, base + (str(self.date.timestamp()).encode() if getattr(self, 'date', None) else b""), hashlib.sha256).hexdigest()
+        short = digest[:12].upper()
+        candidate = f"INV-{self.booking_number}-{short}" if self.booking_number else f"INV-{short}"
+
+        # ensure uniqueness
+        from django.db import transaction
+
+        counter = 0
+        unique_candidate = candidate
+        while True:
+            exists = Booking.objects.filter(public_ref=unique_candidate).exists()
+            if not exists:
+                break
+            counter += 1
+            unique_candidate = f"{candidate}-{counter}"
+
+        self.public_ref = unique_candidate
+
+    def generate_invoice_no(self):
+        """Generate a short unique invoice number for public bookings."""
+        import secrets
+
+        if self.invoice_no:
+            return
+        base = (self.booking_number or str(self.id) or secrets.token_hex(6)).encode()
+        short = secrets.token_hex(6).upper()
+        candidate = f"INV-{short}"
+        counter = 0
+        unique_candidate = candidate
+        while Booking.objects.filter(invoice_no=unique_candidate).exists():
+            counter += 1
+            unique_candidate = f"{candidate}-{counter}"
+        self.invoice_no = unique_candidate
+
+    def save(self, *args, **kwargs):
+        # generate public_ref on first save if missing
+        is_new = self.pk is None
+        super().save(*args, **kwargs)
+        try:
+            if not self.public_ref:
+                # regenerate now that we have a PK/date
+                self.generate_public_ref()
+                super().save(update_fields=["public_ref"])
+        except Exception:
+            # Do not block normal booking saves if public_ref generation fails
+            pass
+
+        # populate voucher QR url (if public_ref is present and there's a configured site base)
+        try:
+            if self.public_ref and (not self.voucher_qr_url):
+                from django.conf import settings as _settings
+                site_base = getattr(_settings, 'SITE_BASE_URL', None) or getattr(_settings, 'FRONTEND_URL', None) or 'http://localhost:8000'
+                url = f"{site_base.rstrip('/')}/order-status/?ref={self.public_ref}"
+                # write back quietly
+                self.voucher_qr_url = url
+                super().save(update_fields=['voucher_qr_url'])
+        except Exception:
+            # Do not block saving for QR population failures
+            pass
 
 class BookingHotelDetails(models.Model):
     STATUS_CHOICES = [
@@ -167,8 +278,66 @@ class BookingHotelDetails(models.Model):
     special_request = models.TextField(blank=True, null=True)  
     sharing_type = models.CharField(max_length=50, blank=True, null=True)
     self_hotel_name = models.CharField(max_length=255, blank=True, null=True)
+    # mark if this particular hotel detail row is from an outsourced/external hotel
+    outsourced_hotel = models.BooleanField(default=False)
     def __str__(self):
-        return f"{self.booking} - {self.hotel}"
+        # Be defensive: related `hotel` object may be missing (stale FK).
+        # Accessing `self.hotel` can raise DoesNotExist during admin rendering
+        # if the related Hotels row was deleted. Fall back to hotel_id.
+        try:
+            hotel = self.hotel
+        except Exception:
+            hotel = f"[missing hotel id={getattr(self, 'hotel_id', None)}]"
+        return f"{self.booking} - {hotel}"
+
+
+class HotelOutsourcing(models.Model):
+    """Record for outsourced/external hotel bookings tied to a Booking.
+
+    Created when a passenger's hotel is sourced externally. This model is soft-deleteable
+    via `is_deleted` and holds a pointer to ledger entries created for payables.
+    """
+    booking = models.ForeignKey(Booking, on_delete=models.CASCADE, related_name='outsourcing_records')
+    booking_hotel_detail = models.ForeignKey(
+        BookingHotelDetails, on_delete=models.SET_NULL, null=True, blank=True, related_name='outsourcing'
+    )
+    hotel_name = models.CharField(max_length=255)
+    source_company = models.CharField(max_length=255, blank=True, null=True)
+    check_in_date = models.DateField(blank=True, null=True)
+    check_out_date = models.DateField(blank=True, null=True)
+    room_type = models.CharField(max_length=100, blank=True, null=True)
+    room_no = models.CharField(max_length=50, blank=True, null=True)
+    price = models.FloatField(default=0)  # price per night
+    quantity = models.PositiveIntegerField(default=1)
+    number_of_nights = models.IntegerField(default=1)
+    currency = models.CharField(max_length=10, default='PKR')
+    remarks = models.TextField(blank=True, null=True)
+    is_paid = models.BooleanField(default=False)
+    agent_notified = models.BooleanField(default=False)
+    created_by = models.ForeignKey('auth.User', on_delete=models.SET_NULL, null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    is_deleted = models.BooleanField(default=False)
+    # link to ledger entry created for this outsourcing (if any)
+    ledger_entry_id = models.IntegerField(blank=True, null=True)
+
+    class Meta:
+        ordering = ['-id']
+        # Prevent duplicate active outsourcing for same booking/hotel detail
+        constraints = [
+            models.UniqueConstraint(fields=['booking', 'booking_hotel_detail'], condition=models.Q(is_deleted=False), name='unique_active_outsource_per_hoteldetail')
+        ]
+
+    @property
+    def outsource_cost(self):
+        try:
+            return float(self.price) * float(self.quantity) * int(self.number_of_nights)
+        except Exception:
+            return 0.0
+
+    def soft_delete(self):
+        self.is_deleted = True
+        self.save()
 
 
 class BookingTransportDetails(models.Model):
@@ -457,6 +626,8 @@ class Payment(models.Model):
     transaction_number = models.CharField(max_length=100, blank=True, null=True)
     # KuickPay transaction/reference number (optional)
     kuickpay_trn = models.CharField(max_length=128, blank=True, null=True)
+    # Public-mode flag indicates this payment was created by an unauthenticated/public flow
+    public_mode = models.BooleanField(default=False)
 class Sector(models.Model):
     departure_city = models.ForeignKey(
         City,

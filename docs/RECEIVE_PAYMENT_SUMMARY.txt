@@ -1,0 +1,15 @@
+Receive Payment → Ledger - Summary
+
+Date: 2025-10-31
+
+Summary:
+- Added `transaction_type` to `Payment` and auto-generated `transaction_number`.
+- Approve/Reject endpoints: approve posts ledger entries (debit/credit); reject logs the rejection.
+- Implemented `PaymentActionLog` for auditing payment actions.
+- Extended `ledger.signals.auto_post_payment` for routing by transaction_type, SAR→PKR conversion, atomic and idempotent posting, and robust action logging.
+- Added `booking/management/commands/reconcile_payments.py` to post missing ledger entries (dry-run by default; use --apply).
+- Added unit tests in `booking/tests/test_payments.py` covering approve→ledger/log, posting failure logging, and reconciliation.
+
+See `docs/RECEIVE_PAYMENT_IMPLEMENTATION.md` for full details, verification steps, and next steps.
+
+File created by the development script.

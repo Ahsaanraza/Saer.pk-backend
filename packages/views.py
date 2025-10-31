@@ -41,6 +41,9 @@ from tickets.serializers import TicketSerializer, HotelsSerializer
 from django.db.models import Q
 from booking.models import AllowedReseller
 from django.utils import timezone
+from rest_framework import generics
+from .serializers import PublicUmrahPackageListSerializer, PublicUmrahPackageDetailSerializer
+from django.utils.text import slugify
 
 
 class RiyalRateViewSet(ModelViewSet):
@@ -287,3 +290,83 @@ class AllPricesAPIView(APIView):
         }
 
         return Response(data)
+
+
+class PublicUmrahPackageListAPIView(generics.ListAPIView):
+    """Public list of Umrah packages (read-only)."""
+    serializer_class = PublicUmrahPackageListSerializer
+
+    def get_queryset(self):
+        today = timezone.now().date()
+        qs = UmrahPackage.objects.filter(
+            is_active=True, is_public=True
+        )
+        # apply date window if fields present
+        qs = qs.filter(
+            Q(available_start_date__isnull=True) | Q(available_start_date__lte=today),
+            Q(available_end_date__isnull=True) | Q(available_end_date__gte=today),
+        )
+
+        # filters
+        city = self.request.query_params.get("city")
+        if city:
+            qs = qs.filter(hotel_details__hotel__city_id=city)
+
+        duration = self.request.query_params.get("duration")
+        if duration:
+            try:
+                dur = int(duration)
+                qs = qs.filter(hotel_details__number_of_nights=dur)
+            except Exception:
+                pass
+
+        price_min = self.request.query_params.get("price_min")
+        price_max = self.request.query_params.get("price_max")
+        if price_min:
+            try:
+                qs = qs.filter(Q(price_per_person__gte=price_min) | Q(adault_visa_price__gte=price_min))
+            except Exception:
+                pass
+        if price_max:
+            try:
+                qs = qs.filter(Q(price_per_person__lte=price_max) | Q(adault_visa_price__lte=price_max))
+            except Exception:
+                pass
+
+        hotel_star = self.request.query_params.get("hotel_star")
+        if hotel_star:
+            qs = qs.filter(hotel_details__hotel__star_rating=hotel_star)
+
+        availability = self.request.query_params.get("availability")
+        if availability and availability.lower() in ("1", "true", "yes"):
+            qs = qs.filter(left_seats__gt=0)
+
+        return qs.distinct()
+
+
+class PublicUmrahPackageDetailAPIView(APIView):
+    """Public package detail view. Lookup by id or slug (slugified title)."""
+
+    def get(self, request, identifier):
+        # try id
+        pkg = None
+        try:
+            if identifier.isdigit():
+                pkg = UmrahPackage.objects.get(id=int(identifier), is_active=True, is_public=True)
+        except UmrahPackage.DoesNotExist:
+            pkg = None
+
+        if pkg is None:
+            # try slug match on title
+            sl = identifier
+            qs = UmrahPackage.objects.filter(is_active=True, is_public=True)
+            for p in qs:
+                if slugify(p.title) == sl:
+                    pkg = p
+                    break
+
+        if not pkg:
+            return Response({"detail": "Not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        serializer = PublicUmrahPackageDetailSerializer(pkg)
+        return Response(serializer.data)

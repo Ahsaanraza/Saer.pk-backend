@@ -1,0 +1,70 @@
+INVENTORY LEDGER SETUP — IMPLEMENTATION SUMMARY
+
+Overview
+--------
+This document describes the hotel & inventory ledger link setup, the business logic, code changes, and developer notes for the new auto-posting and reporting flows.
+
+What was implemented
+--------------------
+- Each booking item (hotel, ticket, umrah package, etc.) now has an `inventory_owner_organization_id` field to track the owner org.
+- System auto-detects and assigns the correct owner org when booking items are created (based on hotel/vendor linkage).
+- Manual edits to `inventory_owner_organization_id`, `booking_no`, and linked payment IDs are restricted (validation and/or signals).
+- On booking status 'Paid', the system auto-creates ledger entries:
+  - Groups items by owner org.
+  - For each owner org, creates a LedgerEntry (debit buyer org, credit owner org) with correct narration and metadata.
+  - Handles multi-org flows (e.g., Agent ↔ Saer.pk, Saer.pk ↔ Al Madina Group) in a single atomic transaction.
+  - Enforces one post per service type per booking (metadata safeguards prevent double posting).
+- Account balances are recalculated after posting using debit-credit logic.
+- Internal notes are stored as a text array for audit and traceability.
+- Currency conversion (SAR→PKR) is handled at posting if needed.
+- Receivable/payable summaries are auto-calculated from ledger data.
+
+API Endpoints Added/Updated
+--------------------------
+- `/api/agents/pending-balances?organization_id=...` — lists agents with negative balances for a given org.
+- `/api/AREA-agents/pending-balances` — area agent pending balances.
+- `/api/BRANCH/pending-balances` — branch pending balances.
+- `/api/ORGANIZATION/pending-balances` — org pending balances.
+- `/api/ledger/org-to-org/<org1>/<org2>/` — org-to-org balance summary.
+- `/api/final-balance?type=...&id=...` — returns final balance for any entity (agent, area agent, org, branch).
+
+Key Logic & Rules
+-----------------
+- Each booking item is linked to its inventory owner org at creation (auto-detected, not user-editable).
+- On booking paid, system groups items by owner org and posts one ledger entry per owner org (debit buyer, credit owner).
+- Multi-org bookings (multiple hotels/vendors) result in multiple ledger entries, all posted atomically.
+- No manual changes allowed to key fields (owner org, booking_no, payment IDs) to protect audit trail.
+- No double posting: one ledger entry per service type per booking/payment; later changes are adjustments only.
+- No manual cross-ledger updates; org-to-org flows are always auto-synced.
+- Internal notes are attached to ledger entries for traceability.
+- Currency conversion is performed at posting if needed (SAR→PKR).
+- Receivable/payable summaries are calculated as total_debit - total_credit per account.
+
+Code Changes (files updated)
+----------------------------
+- booking/models.py: added `inventory_owner_organization_id` to booking items.
+- booking/signals.py or ledger/signals.py: updated to group items by owner org and post ledger entries per org on booking paid.
+- ledger/models.py: no schema change, but logic updated for multi-org posting.
+- ledger/views.py: new/updated endpoints for pending balances and org-to-org summaries.
+- ledger/serializers.py: updated to support new response shapes.
+- ledger/tests.py: added tests for multi-org bookings, double posting prevention, and audit safety.
+- (Optional) booking/validators.py: restrict manual edits to protected fields.
+
+How to Demo
+-----------
+1. Create a booking with multiple items (e.g., two hotels with different owner orgs).
+2. Mark booking as 'Paid'.
+3. System auto-creates ledger entries for each owner org (debit buyer, credit owner).
+4. Check `/api/ledger/list/` or admin to verify entries.
+5. Use pending balance APIs to see updated balances for agents, area agents, branches, and orgs.
+6. Try to manually edit protected fields — system should block changes.
+
+Developer Notes
+---------------
+- All posting is atomic and idempotent (no double entries).
+- Internal notes and metadata are used for traceability.
+- Currency conversion logic can be extended as needed.
+- For any new service type, ensure inventory_owner_organization_id is set and handled in posting logic.
+
+Prepared by: Automated coding assistant
+Date: 2025-10-28

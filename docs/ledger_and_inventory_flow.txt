@@ -1,0 +1,130 @@
+🧾 1️⃣ Ledger System (Core Financial Logic)
+
+How it works:
+
+Whenever a booking payment is marked as completed, the system’s internal signal is triggered.
+
+This signal automatically creates a Ledger Entry that records both sides of the transaction (Debit & Credit).
+
+Example: If an agent pays for a booking, the system:
+
+Debits the Agent’s account, and
+
+Credits the Organization’s account (or inventory owner).
+
+The process happens automatically, atomically, and instantly, without manual posting.
+
+Every transaction is also logged in internal_notes for a clear audit trail (who paid, for what, and when).
+
+If the payment is made in SAR, the system automatically converts it into PKR using the latest rate from the RiyalRate table — no manual conversion required.
+
+
+Below are example JSON formats you can present — clean, realistic, and easy to understand 👇
+
+🧾 1️⃣ Ledger Entry (Auto-Posted Example)
+{
+  "id": 101,
+  "booking_no": "B-UMRAH-2025-001",
+  "service_type": "hotel",
+  "narration": "Auto-post for hotel booking",
+  "creation_datetime": "2025-10-28T10:45:00Z",
+  "currency": "PKR",
+  "metadata": {
+    "payment_id": 25,
+    "auto_posted": true,
+    "source": "BookingPaymentSignal"
+  },
+  "internal_notes": [
+    "[2025-10-28 10:45] Payment #25 received and auto-posted.",
+    "[2025-10-28 10:46] Rate converted from SAR → PKR using RiyalRate (1 SAR = 74.20 PKR)."
+  ],
+  "lines": [
+    {
+      "account_id": 12,
+      "account_name": "Agent - Ahmed Raza",
+      "account_type": "AGENT",
+      "debit": "74200.00",
+      "credit": "0.00",
+      "final_balance": "74200.00"
+    },
+    {
+      "account_id": 5,
+      "account_name": "Saer.pk (Inventory Owner)",
+      "account_type": "ORGANIZATION",
+      "debit": "0.00",
+      "credit": "74200.00",
+      "final_balance": "-74200.00"
+    }
+  ]
+}
+
+This JSON shows how the ledger automatically recorded a hotel booking payment.
+
+The agent paid 1,000 SAR → system converted it into 74,200 PKR using the latest rate.
+
+Debit = Agent’s payment, Credit = Organization’s account.
+
+Internal notes clearly show the transaction history.
+
+
+
+🏨 2️⃣ Hotel & Inventory Link Rule
+
+How it works:
+
+Every booking item (Hotel, Ticket, Umrah Package, etc.) now has an inventory_owner_organization.
+
+The system automatically detects who owns that item (for example, Saer.pk or Al Madina Group).
+
+When a payment is made, the system creates separate ledger entries for each inventory owner organization involved in the booking.
+
+Example:
+
+If Hotel A belongs to Saer.pk and Hotel B belongs to Al Madina Group,
+
+When payment is completed →
+
+One ledger entry is created between Agent ↔ Saer.pk, and
+
+Another ledger entry is created between Saer.pk ↔ Al Madina Group (as reseller).
+
+This ensures all ownership, commissions, and balances are automatically settled in the ledger.
+
+🏨 2️⃣ Hotel & Inventory Link RULE JSON
+{
+  "booking_no": "B-HOTEL-2025-008",
+  "organization_id": 8,
+  "organization_name": "Saer.pk",
+  "service_type": "hotel",
+  "hotel_items": [
+    {
+      "hotel_name": "Hilton Makkah",
+      "inventory_owner_organization_id": 8,
+      "inventory_owner_name": "Saer.pk",
+      "price_sar": 1200,
+      "price_pkr": 89040,
+      "nights": 2
+    },
+    {
+      "hotel_name": "Al Madina Royal",
+      "inventory_owner_organization_id": 12,
+      "inventory_owner_name": "Al Madina Group",
+      "price_sar": 800,
+      "price_pkr": 59360,
+      "nights": 1
+    }
+  ],
+  "total_amount_sar": 2000,
+  "total_amount_pkr": 148400,
+  "status": "Paid"
+}
+
+This booking includes two hotels owned by different organizations.
+
+The system automatically detects which organization owns each hotel.
+
+When payment is marked Paid, it posts two separate ledger entries:
+
+Agent ↔ Saer.pk
+
+Saer.pk ↔ Al Madina Group

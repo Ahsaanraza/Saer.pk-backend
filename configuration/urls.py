@@ -29,6 +29,13 @@ urlpatterns = [
     path("", include("packages.urls")),  
     path("", include("tickets.urls")), 
     path("", include("booking.urls")),
+    path("api/leads/", include("leads.urls")),
+    path("api/area-leads/", include("area_leads.urls")),
+    path("api/logs/", include("logs.urls")),
+    path("api/commissions/", include("commissions.urls")),
+    path("api/universal/", include("universal.urls")),
+    path("api/blog/", include("blog.urls")),
+    path("api/promotion-center/", include("promotion_center.urls")),
 
     # ✅ Debug & API Docs
     path("__debug__/", include("debug_toolbar.urls")),

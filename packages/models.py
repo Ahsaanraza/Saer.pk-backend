@@ -283,6 +283,15 @@ class UmrahPackage(models.Model):
     inventory_owner_organization_id = models.IntegerField(blank=True, null=True)
     # Whether this package may be resold by allowed resellers
     reselling_allowed = models.BooleanField(default=False)
+    # Public visibility and availability window for public bookings
+    is_public = models.BooleanField(default=False)
+    available_start_date = models.DateField(blank=True, null=True)
+    available_end_date = models.DateField(blank=True, null=True)
+    # canonical per-person price used for public bookings
+    price_per_person = models.DecimalField(max_digits=12, decimal_places=2, blank=True, null=True)
+    # Minimum partial payment rules (can be organization-specific too)
+    min_partial_percent = models.DecimalField(max_digits=5, decimal_places=2, blank=True, null=True)
+    min_partial_amount = models.DecimalField(max_digits=12, decimal_places=2, blank=True, null=True)
 
     # Commission configuration
     # Area Agent Commission per pax type

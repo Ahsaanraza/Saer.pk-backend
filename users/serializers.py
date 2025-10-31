@@ -7,9 +7,13 @@ from organization.models import Organization, Branch, Agency
 
 
 class UserProfileSerializer(serializers.ModelSerializer):
+    commission_id = serializers.CharField(read_only=False, required=False, allow_null=True)
+
     class Meta:
         model = UserProfile
-        exclude = ["user"]
+        # explicitly include commission_id and avoid exposing user FK through this serializer
+        fields = ["id", "type", "commission_id"]
+        read_only_fields = ["id"]
 
 
 class UserSerializer(serializers.ModelSerializer):
